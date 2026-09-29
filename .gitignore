@@ -1,0 +1,50 @@
+# 运行态产物
+/capture/
+/data/
+/certs/
+/command.json
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+
+# 构建产物
+/mockc2.exe
+/mockc2
+*.exe
+*.exe~
+*.v6bak
+/dist/
+/release/
+/tools/**/*.exe
+
+# 发布包副本（内含二进制/归档，非源码）
+/deploy/mockc2-release/
+/deploy/*.tar.gz
+
+# 运行态快照/样本数据
+**/api_snapshot.json
+*.pcap
+
+# 本地配置覆盖（真实口令/DB 密码所在）
+/mockc2_settings.json
+
+# 日志与临时
+/_srv*.out
+/_srv*.err
+*.log
+*.bak
+*.bak-*
+nohup.out
+.gostack*
+
+# IDE
+.vscode/
+.idea/
+
+# 前端依赖与构建输出
+node_modules/
+/frontend/dist/
+frontend/dist.zip
+*.err

@@ -1,0 +1,19 @@
+﻿{
+  "host": "0.0.0.0",
+  "http_port": 9100,
+  "https_port": 9443,
+  "admin_password": "CHANGE-ME-strong-password",
+  "admin_session_ttl": 43200,
+  "ops_token": "",
+  "server_header": "nginx/1.22.0",
+
+  "db_host": "127.0.0.1",
+  "db_port": 3306,
+  "db_user": "mockc2",
+  "db_password": "CHANGE-ME-db-password",
+  "db_name": "mockc2",
+  "db_params": "",
+  "db_max_open_conns": 32,
+  "db_max_idle_conns": 8,
+  "db_conn_max_lifetime": 30
+}

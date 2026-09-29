@@ -1,0 +1,84 @@
+# MockC2 企业级部署编排（MySQL 8 + 应用）
+#
+# 用法：
+#   cd deploy
+#   cp .env.example .env      # 修改密码/密钥
+#   docker compose up -d --build
+#   docker compose logs -f app
+#
+# 说明：
+#   - MySQL 仅绑定 127.0.0.1:3306（防公网直连）；应用暴露 9100/9443
+#   - 数据库首次启动自动建库建用户（环境变量），app 启动时自动执行迁移
+#   - capture/ 与 certs/ 持久化在命名卷；数据面大文件不进 MySQL（只存索引/流水）
+
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: mockc2-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?set in .env}
+      MYSQL_DATABASE: ${MOCKC2_DB_NAME:-mockc2}
+      MYSQL_USER: ${MOCKC2_DB_USER:-mockc2}
+      MYSQL_PASSWORD: ${MOCKC2_DB_PASSWORD:?set in .env}
+      TZ: ${TZ:-Asia/Shanghai}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --max-connections=300
+      - --innodb-buffer-pool-size=512M
+      - --innodb-flush-log-at-trx-commit=2
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u$$MYSQL_USER -p$$MYSQL_PASSWORD --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    ports:
+      - "127.0.0.1:3306:3306"
+    networks: [mockc2]
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: mockc2-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+    environment:
+      MOCKC2_ROOT: /opt/mockc2
+      MOCKC2_HOST: 0.0.0.0
+      MOCKC2_HTTP_PORT: "9100"
+      MOCKC2_HTTPS_PORT: "9443"
+      MOCKC2_ADMIN_PASSWORD: ${MOCKC2_ADMIN_PASSWORD:?set in .env}
+      MOCKC2_SESSION_SECRET: ${MOCKC2_SESSION_SECRET:-}
+      MOCKC2_OPS_TOKEN: ${MOCKC2_OPS_TOKEN:-}
+      MOCKC2_DB_HOST: mysql
+      MOCKC2_DB_PORT: "3306"
+      MOCKC2_DB_USER: ${MOCKC2_DB_USER:-mockc2}
+      MOCKC2_DB_PASSWORD: ${MOCKC2_DB_PASSWORD:?set in .env}
+      MOCKC2_DB_NAME: ${MOCKC2_DB_NAME:-mockc2}
+      MOCKC2_DB_MAX_OPEN_CONNS: "32"
+      MOCKC2_DB_MAX_IDLE_CONNS: "8"
+      TZ: ${TZ:-Asia/Shanghai}
+    volumes:
+      - capture_data:/opt/mockc2/capture
+      - certs_data:/opt/mockc2/certs
+    ports:
+      - "9100:9100"
+      - "9443:9443"
+    networks: [mockc2]
+
+volumes:
+  mysql_data:
+  capture_data:
+  certs_data:
+
+networks:
+  mockc2:
+    driver: bridge

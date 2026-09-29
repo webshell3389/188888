@@ -1,0 +1,154 @@
+/* ============================================================================
+ * 设计令牌（Design Tokens）
+ * 单一来源：颜色 / 间距 / 圆角 / 阴影 / 字号 / 层级。
+ * 主题切换只改 [data-theme]，组件全部消费变量，不出现硬编码颜色。
+ * ==========================================================================*/
+
+:root {
+  /* 间距刻度（4pt 栅格） */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+
+  /* 圆角 */
+  --r-sm: 4px;
+  --r-md: 8px;
+  --r-lg: 12px;
+  --r-xl: 16px;
+  --r-pill: 999px;
+
+  /* 字号 */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 15px;
+  --fs-xl: 18px;
+  --fs-2xl: 24px;
+  --fs-3xl: 32px;
+
+  /* 字体族 */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC',
+    'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, 'Liberation Mono',
+    Menlo, monospace;
+
+  /* 布局 */
+  --sidebar-w: 224px;
+  --sidebar-w-collapsed: 64px;
+  --topbar-h: 56px;
+
+  /* 动效 */
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+
+  /* 语义色（由主题覆写） */
+  --c-ok: #34d399;
+  --c-warn: #fbbf24;
+  --c-err: #f87171;
+  --c-info: #60a5fa;
+}
+
+/* ── 深色（默认，科技风） ───────────────────────────────── */
+[data-theme='dark'] {
+  --bg-app: #0b0f17;
+  --bg-sidebar: #0e141f;
+  --bg-topbar: rgba(14, 20, 31, 0.86);
+  --bg-card: #121a27;
+  --bg-card-alt: #16202f;
+  --bg-hover: rgba(64, 158, 255, 0.09);
+  --bg-active: rgba(64, 158, 255, 0.16);
+  --bg-input: #101825;
+
+  --border: #1e2a3d;
+  --border-strong: #2a3a52;
+  --border-glow: rgba(64, 158, 255, 0.35);
+
+  --text-1: #e6edf7;
+  --text-2: #9fb0c8;
+  --text-3: #64748b;
+  --text-inv: #0b0f17;
+
+  --brand: #409eff;
+  --brand-2: #6cb6ff;
+  --brand-soft: rgba(64, 158, 255, 0.14);
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.45);
+  --shadow-3: 0 12px 40px rgba(0, 0, 0, 0.55);
+
+  --grid-line: rgba(148, 163, 184, 0.12);
+
+  /* Element Plus 对齐 */
+  --el-bg-color: var(--bg-card);
+  --el-bg-color-overlay: var(--bg-card-alt);
+  --el-bg-color-page: var(--bg-app);
+  --el-text-color-primary: var(--text-1);
+  --el-text-color-regular: var(--text-1);
+  --el-text-color-secondary: var(--text-2);
+  --el-text-color-placeholder: var(--text-3);
+  --el-border-color: var(--border);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--border);
+  --el-border-color-extra-light: var(--border);
+  --el-fill-color: var(--bg-card-alt);
+  --el-fill-color-light: var(--bg-hover);
+  --el-fill-color-lighter: var(--bg-hover);
+  --el-fill-color-blank: var(--bg-input);
+  --el-color-primary: var(--brand);
+  --el-mask-color: rgba(0, 0, 0, 0.68);
+}
+
+/* ── 浅色（经典企业风） ─────────────────────────────────── */
+[data-theme='light'] {
+  --bg-app: #f2f5f9;
+  --bg-sidebar: #ffffff;
+  --bg-topbar: rgba(255, 255, 255, 0.9);
+  --bg-card: #ffffff;
+  --bg-card-alt: #f7f9fc;
+  --bg-hover: rgba(24, 110, 200, 0.07);
+  --bg-active: rgba(24, 110, 200, 0.12);
+  --bg-input: #ffffff;
+
+  --border: #e3e8ef;
+  --border-strong: #cdd6e2;
+  --border-glow: rgba(24, 110, 200, 0.28);
+
+  --text-1: #1f2937;
+  --text-2: #55637a;
+  --text-3: #8a97ab;
+  --text-inv: #ffffff;
+
+  --brand: #186ec8;
+  --brand-2: #3b8ee0;
+  --brand-soft: rgba(24, 110, 200, 0.1);
+
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --shadow-2: 0 4px 14px rgba(16, 24, 40, 0.08);
+  --shadow-3: 0 12px 32px rgba(16, 24, 40, 0.12);
+
+  --grid-line: rgba(100, 116, 139, 0.16);
+
+  --el-bg-color: #ffffff;
+  --el-bg-color-overlay: #ffffff;
+  --el-bg-color-page: var(--bg-app);
+  --el-text-color-primary: var(--text-1);
+  --el-text-color-regular: var(--text-1);
+  --el-text-color-secondary: var(--text-2);
+  --el-text-color-placeholder: var(--text-3);
+  --el-border-color: var(--border-strong);
+  --el-border-color-light: var(--border);
+  --el-border-color-lighter: var(--border);
+  --el-border-color-extra-light: var(--border);
+  --el-fill-color: var(--bg-card-alt);
+  --el-fill-color-light: var(--bg-hover);
+  --el-fill-color-lighter: var(--bg-hover);
+  --el-fill-color-blank: #ffffff;
+  --el-color-primary: var(--brand);
+  --el-mask-color: rgba(16, 24, 40, 0.4);
+}

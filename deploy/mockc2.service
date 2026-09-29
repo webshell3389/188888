@@ -1,0 +1,35 @@
+﻿[Unit]
+Description=Mock C2 / Delivery Backend (lab, MySQL)
+Documentation=file:/opt/mockc2/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/mockc2
+# 数据库连接与密钥：/opt/mockc2/mockc2.env（install.sh 生成，权限 0600）
+# 变量优先级：默认 < mockc2_settings.json < EnvironmentFile/环境变量
+EnvironmentFile=-/opt/mockc2/mockc2.env
+# Go 单进程已用满多核；MySQL 连接池支撑并发，无需多 worker。
+# 如需进程级隔离/独立重启：--workers N（子进程端口=HTTP端口+1..+N）
+ExecStart=/opt/mockc2/mockc2 --no-https
+Restart=on-failure
+RestartSec=2
+
+User=mockc2
+Group=mockc2
+
+# 高并发文件/连接
+LimitNOFILE=65535
+
+# 关键环境变量（样例见 mockc2.env 注释；务必改默认口令）：
+#   MOCKC2_ADMIN_PASSWORD / MOCKC2_SESSION_SECRET / MOCKC2_OPS_TOKEN
+#   MOCKC2_DB_HOST / MOCKC2_DB_PORT / MOCKC2_DB_USER / MOCKC2_DB_PASSWORD / MOCKC2_DB_NAME
+# 多实例部署时必须一致：MOCKC2_SESSION_SECRET（或相同 admin_password）+ 同一 MySQL 库
+
+# 允许绑定 1024 以下端口时按需打开
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+# CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

