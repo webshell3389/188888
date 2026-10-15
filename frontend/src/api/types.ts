@@ -242,6 +242,8 @@ export interface VisitorRow {
   domain?: string
   host?: string
   ua?: string
+  progress?: number
+  stage?: string
   [k: string]: unknown
 }
 
@@ -255,6 +257,7 @@ export interface VisitsPage {
   today_visits?: number
   page?: number
   per?: number
+  progress?: Record<string, number>
   [k: string]: unknown
 }
 

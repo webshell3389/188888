@@ -2,6 +2,7 @@ package store
 
 import (
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -140,6 +141,60 @@ func clientStageProgressRaw() map[string]int {
 		}
 	}
 	return out
+}
+
+// ClientStageProgressFor 只读取指定 client 的阶段进度，供分页接口使用。
+// 访问统计页面只展示当前页，不应为 20 条记录返回整张 client_stage 表。
+func ClientStageProgressFor(clients []string) map[string]int {
+	if len(clients) == 0 {
+		return map[string]int{}
+	}
+	db := GetDB()
+	if db == nil {
+		return map[string]int{}
+	}
+	query, args := clientStageProgressQuery(clients)
+	rows := db.Query(query, args...)
+	out := make(map[string]int, len(rows))
+	for _, r := range rows {
+		client := toStr(r["client"])
+		if client != "" {
+			out[client] = int(toInt(r["pct"]))
+		}
+	}
+	return out
+}
+
+func filterClientStageProgress(progress map[string]int, clients []string) map[string]int {
+	out := make(map[string]int, len(clients))
+	for _, client := range clients {
+		if pct, ok := progress[client]; ok {
+			out[client] = pct
+		}
+	}
+	return out
+}
+
+func clientStageProgressQuery(clients []string) (string, []any) {
+	placeholders := make([]string, 0, len(clients))
+	args := make([]any, 0, len(clients))
+	seen := make(map[string]struct{}, len(clients))
+	for _, client := range clients {
+		client = strings.TrimSpace(client)
+		if client == "" {
+			continue
+		}
+		if _, ok := seen[client]; ok {
+			continue
+		}
+		seen[client] = struct{}{}
+		placeholders = append(placeholders, "?")
+		args = append(args, client)
+	}
+	if len(placeholders) == 0 {
+		return "SELECT client, pct FROM client_stage WHERE 1=0", nil
+	}
+	return "SELECT client, pct FROM client_stage WHERE pct > 0 AND client IN (" + strings.Join(placeholders, ",") + ")", args
 }
 
 // BackfillClientStage 一次性从 access_log 回填 client_stage（首次启用/迁移时）。

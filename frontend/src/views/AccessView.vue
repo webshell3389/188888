@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { panelApi } from '@/api/panel'
-import { useDashStore } from '@/stores/dash'
 import type { VisitorRow } from '@/api/types'
 import EmptyState from '@/components/EmptyState.vue'
 import { pctClass, shortIP, tsShort, uaLabel } from '@/utils/format'
@@ -15,8 +14,6 @@ import { pctClass, shortIP, tsShort, uaLabel } from '@/utils/format'
  *    翻页/筛选只拉一页，禁止一次性回传全量（旧版 visits(500) 全加载是页面卡顿主因）。
  *  - dash 轮询触发的自动刷新只重拉当前页；页码越界自动回退最后一页。
  */
-const dash = useDashStore()
-
 const records = ref<VisitorRow[]>([])
 /** 当前筛选条件下的总行数（分页总数） */
 const totalRows = ref(0)
@@ -26,46 +23,54 @@ const loading = ref(false)
 const kw = ref('')
 const page = ref(1)
 const per = ref(20)
-const progressRows = ref<Array<Record<string, unknown>>>([])
 
 // 竞态序号：翻页/轮询并发时，过期响应直接丢弃
 let loadSeq = 0
+let activeLoad: AbortController | undefined
 
 async function load() {
+  if (loading.value) {
+    activeLoad?.abort()
+  }
   const my = ++loadSeq
+  activeLoad?.abort()
+  const controller = new AbortController()
+  activeLoad = controller
   loading.value = true
   try {
-    const [v, p] = await Promise.all([
-      panelApi.visits(kw.value.trim(), page.value, per.value),
-      panelApi.progress(),
-    ])
+    const v = await panelApi.visits(kw.value.trim(), page.value, per.value, controller.signal)
     if (my !== loadSeq) return
     records.value = v?.records ?? []
     totalRows.value = Number(v?.total ?? 0)
     totalVisits.value = Number(v?.total_visits ?? v?.total ?? 0)
-    progressRows.value = Array.isArray(p?.rows) ? p.rows : []
     // 删除/筛选后页码越界：回退最后一页（page watcher 触发重拉）
     const maxPage = Math.max(1, Math.ceil(totalRows.value / per.value))
     if (page.value > maxPage) page.value = maxPage
-  } catch {
-    if (my === loadSeq) {
+  } catch (error: unknown) {
+    if (my === loadSeq && (error as { code?: string })?.code !== 'ERR_CANCELED') {
       records.value = []
-      progressRows.value = []
     }
   } finally {
-    if (my === loadSeq) loading.value = false
+    if (my === loadSeq) {
+      loading.value = false
+      activeLoad = undefined
+    }
   }
 }
 
+let refreshTimer: number | undefined
+
 onMounted(() => {
   void load()
+  refreshTimer = window.setInterval(() => {
+    if (!document.hidden && !loading.value) void load()
+  }, 15000)
 })
-watch(
-  () => dash.snap.ts,
-  () => {
-    if (dash.snap.ts) void load()
-  },
-)
+onUnmounted(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer)
+  activeLoad?.abort()
+  activeLoad = undefined
+})
 
 // 筛选变化（300ms 防抖）：回第 1 页。page 未变时显式重拉，避免漏触发。
 let kwTimer: number | undefined
@@ -84,10 +89,10 @@ watch([page, per], () => {
 
 const progressMap = computed(() => {
   const m = new Map<string, { pct: number; stage: string }>()
-  for (const r of progressRows.value) {
-    const ip = String(r.client ?? r.ip ?? '')
+  for (const row of records.value) {
+    const ip = String(row.ip || '')
     if (!ip) continue
-    m.set(ip, { pct: Number(r.percent ?? 0), stage: String(r.stage ?? '') })
+    m.set(ip, { pct: Number(row.progress ?? 0), stage: String(row.stage ?? '') })
   }
   return m
 })

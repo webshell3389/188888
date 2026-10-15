@@ -1,4 +1,5 @@
 import { get, post } from './http'
+import type { AxiosRequestConfig } from 'axios'
 import type {
   AppRow,
   Bip39Page,
@@ -147,7 +148,8 @@ export const panelApi = {
     return get<ResultDetail>('/panel/api/result/' + encodeURIComponent(String(id)))
   },
   /** 访问统计（服务端分页，每页默认 20；kw 筛选下推） */
-  visits(kw = '', page = 1, per = 20) {
-    return get<VisitsPage>('/panel/api/visits', { kw, page, per })
+  visits(kw = '', page = 1, per = 20, signal?: AbortSignal) {
+    const config: AxiosRequestConfig | undefined = signal ? { signal } : undefined
+    return get<VisitsPage>('/panel/api/visits', { kw, page, per }, config)
   },
 }

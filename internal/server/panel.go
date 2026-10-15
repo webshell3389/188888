@@ -318,6 +318,19 @@ func registerPanel(rt *Router) {
 			"SELECT last_seen AS ts, ip, device_version, domain, host, ua"+
 				" FROM devices"+where+" ORDER BY last_seen DESC, id DESC LIMIT ? OFFSET ?",
 			append(append([]any{}, args...), per, (page-1)*per)...)
+		clients := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if client := store.ToStr(row["ip"]); client != "" {
+				clients = append(clients, client)
+			}
+		}
+		progress := store.ClientStageProgressFor(clients)
+		for _, row := range rows {
+			client := store.ToStr(row["ip"])
+			pct := progress[client]
+			row["progress"] = pct
+			row["stage"] = store.StageNameForPercent(pct)
+		}
 		// 去重来访（全量口径，头部 chip；与列表筛选无关）
 		totalVisits := store.ToInt(db.QueryOne(
 			"SELECT COUNT(DISTINCT CONCAT(ip,'|',COALESCE(device_version,''))) AS n FROM devices")["n"])
@@ -328,7 +341,8 @@ func registerPanel(rt *Router) {
 				" WHERE SUBSTR(first_seen,1,10)=?", today)["n"])
 		writeJSON(w, http.StatusOK, map[string]any{
 			"records": rows, "total": total, "total_visits": totalVisits,
-			"today_visits": todayN, "page": page, "per": per})
+			"today_visits": todayN, "page": page, "per": per,
+			"progress": progress})
 	})
 
 	rt.GET("/panel/download", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
