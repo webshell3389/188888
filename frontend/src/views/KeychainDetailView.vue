@@ -51,7 +51,7 @@ onMounted(load)
           <a
             class="kd__btn"
             title="下载 war 原包"
-            :href="cur?.packet_id ? `/panel/api/keychain/war_download?packet_id=${cur.packet_id}` : '#'"
+            :href="cur?.packet_id ? `/panel/download?packet_id=${cur.packet_id}` : '#'"
             download
           >
             <el-icon><Download /></el-icon>war 包

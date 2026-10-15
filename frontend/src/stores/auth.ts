@@ -29,10 +29,10 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function login(password: string): Promise<boolean> {
+  async function login(username: string, password: string): Promise<boolean> {
     error.value = ''
     try {
-      const r = await authApi.login(password)
+      const r = await authApi.login(username, password)
       if (r?.ok === true) {
         authed.value = true
         return true
@@ -41,7 +41,7 @@ export const useAuthStore = defineStore('auth', () => {
       return false
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status
-      error.value = status === 401 ? '口令不正确' : '登录失败：无法连接后端'
+      error.value = status === 401 ? '账号或口令不正确' : '登录失败：无法连接后端'
       return false
     }
   }

@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { computed, ref, watch } from 'vue'
 import { dashApi } from '@/api/dash'
+import { describeNetworkError, getApiBase, probeBackend } from '@/api/http'
 import type { AccessLog, DashSnapshot, Device, PacketItem, PeEvent, ProbeLog, WalletStat } from '@/api/types'
 import { dedupeBy, deviceKey } from '@/utils/format'
 import { bus, EVT } from '@/utils/bus'
@@ -91,8 +92,19 @@ export const useDashStore = defineStore('dash', () => {
     } catch (e: unknown) {
       const status = (e as { response?: { status?: number } })?.response?.status
       if (!status) {
-        // 网络层：后端未启动 / 断连
-        ui.setError('network', '无法连接后端（检查 9001 端口是否存活）')
+        // 网络层失败细分：超时（后端在但慢/卡 DB）vs 连接失败（服务未启动）。
+        // 用后端存活探测（GET 静态根，不走 DB）避免把"DB 卡死"误报成"服务未启动"。
+        const ax = e as { code?: string } | undefined
+        let msg: string
+        if (ax?.code === 'ECONNABORTED') {
+          msg = describeNetworkError(e)
+        } else if (await probeBackend()) {
+          msg = `后端进程在运行，但 ${getApiBase() || location.origin} 请求失败（CORS / 路径 / 代理配置问题）`
+        } else {
+          msg = `无法连接后端服务：${getApiBase() || location.origin}（服务未启动或网络不通）`
+        }
+        ui.setError('network', msg)
+        backoff = Math.min(backoff * 2, 8) // 网络失败同样指数退避，避免 DB 故障期间高频重试
       } else if (status >= 500) {
         ui.setError('server', `后端返回 ${status}，已暂停高频重试`)
         backoff = Math.min(backoff * 2, 8)

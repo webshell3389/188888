@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>chainquery · 多链余额/代币查询</title>
+<style>
+  :root { --bg:#0f1420; --card:#171e2e; --line:#2a3550; --txt:#dfe6f5; --dim:#8fa0c0; --acc:#4f8cff; --ok:#39d98a; --warn:#ffb020; --err:#ff5d5d; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--txt); font:14px/1.6 "Segoe UI",system-ui,sans-serif; }
+  .wrap { max-width:1180px; margin:0 auto; padding:22px 18px 60px; }
+  h1 { font-size:20px; margin:0 0 4px; }
+  h1 span { color:var(--acc); }
+  .sub { color:var(--dim); font-size:12.5px; margin-bottom:18px; }
+  .panel { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px; margin-bottom:14px; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  @media (max-width:860px){ .grid { grid-template-columns:1fr; } }
+  label { display:block; font-size:12.5px; color:var(--dim); margin-bottom:6px; }
+  textarea { width:100%; min-height:120px; background:#0c111c; color:var(--txt); border:1px solid var(--line);
+             border-radius:8px; padding:10px; font:12.5px/1.5 Consolas,monospace; resize:vertical; outline:none; }
+  textarea:focus { border-color:var(--acc); }
+  .row { display:flex; flex-wrap:wrap; gap:10px 16px; align-items:center; margin-top:12px; }
+  .chk { display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--txt); cursor:pointer; }
+  .chk input { accent-color:var(--acc); }
+  .sep { border-top:1px dashed var(--line); margin:12px 0; }
+  button { background:var(--acc); border:0; color:#fff; padding:9px 18px; border-radius:8px; font-size:13.5px;
+           cursor:pointer; font-weight:600; }
+  button:hover { filter:brightness(1.12); }
+  button.ghost { background:transparent; border:1px solid var(--line); color:var(--txt); font-weight:400; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #progress { display:none; margin-top:10px; font-size:12.5px; color:var(--dim); }
+  .bar { height:6px; background:#0c111c; border-radius:4px; overflow:hidden; margin-top:6px; }
+  .bar i { display:block; height:100%; width:0; background:var(--acc); transition:width .4s; }
+  .summary { display:flex; gap:26px; flex-wrap:wrap; margin-bottom:4px; }
+  .summary b { color:var(--ok); font-size:18px; }
+  .res { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px 16px; margin-bottom:14px; }
+  .res h3 { margin:0 0 2px; font-size:14px; }
+  .res .meta { color:var(--dim); font-size:12px; margin-bottom:10px; word-break:break-all; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--dim); font-weight:500; }
+  td.mono, .mono { font-family:Consolas,monospace; font-size:12px; word-break:break-all; }
+  tr.nz td { color:var(--ok); font-weight:600; }
+  .tag { display:inline-block; background:#22304d; color:#9db6e8; border-radius:5px; padding:1px 7px; font-size:11.5px; margin-left:6px; }
+  .err { color:var(--err); font-size:12px; }
+  .tok { margin-top:8px; }
+  .tok td { color:var(--txt); }
+  .hint { color:var(--dim); font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>chain<span>query</span> · 多链余额/代币查询</h1>
+  <div class="sub">BTC / ETH / BSC / Base / Polygon / Arbitrum / Optimism / AVAX / LTC / DOGE / BCH / TRON / SOL · 含 EVM 代币 · SPL · TRC-20 · USDT/USDC 直连核验 · 多 RPC 回退</div>
+
+  <div class="panel">
+    <div class="grid">
+      <div>
+        <label>助记词（每行一个，自动派生 13 链地址）</label>
+        <textarea id="mnemonics" placeholder="word1 word2 ... word12"></textarea>
+      </div>
+      <div>
+        <label>或直接输入地址（每行一个，自动识别链）</label>
+        <textarea id="addresses" placeholder="0x... / bc1... / ltc1... / T... / D... / SOL 地址"></textarea>
+      </div>
+    </div>
+    <div class="sep"></div>
+    <label>链选择</label>
+    <div class="row" id="chainBox"></div>
+    <div class="sep"></div>
+    <div class="row">
+      <label class="chk"><input type="checkbox" id="tokens" checked> 查询代币（EVM/SPL/TRC-20）</label>
+      <label class="chk"><input type="checkbox" id="prices" checked> 美元估值（Binance 实时价）</label>
+      <span style="flex:1"></span>
+      <button id="run">开始查询</button>
+      <button class="ghost" id="clear">清空</button>
+    </div>
+    <div id="progress"><span id="ptext"></span><div class="bar"><i id="pbar"></i></div></div>
+  </div>
+
+  <div class="panel" id="summaryPanel" style="display:none">
+    <div class="summary">
+      <div>非零钱包 <b id="sumNz">0</b></div>
+      <div>合计估值 <b id="sumUsd">$0</b></div>
+      <div>查询用时 <b id="sumTime">0s</b></div>
+    </div>
+    <div class="row">
+      <button class="ghost" id="expJson">导出 JSON</button>
+      <button class="ghost" id="expCsv">导出 CSV</button>
+    </div>
+  </div>
+
+  <div id="results"></div>
+</div>
+
+<script>
+const CHAINS = ["BTC","ETH","BSC","Base","Polygon","Arbitrum","Optimism","AVAX","LTC","DOGE","BCH","TRON","SOL"];
+let LAST = null, timer = null;
+
+const chainBox = document.getElementById('chainBox');
+CHAINS.forEach(c => {
+  const l = document.createElement('label');
+  l.className = 'chk';
+  l.innerHTML = `<input type="checkbox" value="${c}" checked> ${c}`;
+  chainBox.appendChild(l);
+});
+const selectedChains = () => [...chainBox.querySelectorAll('input:checked')].map(x => x.value);
+
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+
+document.getElementById('run').onclick = async () => {
+  const mnemonics = document.getElementById('mnemonics').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const addresses = document.getElementById('addresses').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  if (!mnemonics.length && !addresses.length) { alert('请输入助记词或地址'); return; }
+  const body = { mnemonics, addresses, chains: selectedChains(),
+                 tokens: document.getElementById('tokens').checked,
+                 prices: document.getElementById('prices').checked };
+  const btn = document.getElementById('run');
+  btn.disabled = true;
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('summaryPanel').style.display = 'none';
+  document.getElementById('progress').style.display = 'block';
+  document.getElementById('ptext').textContent = '任务提交中…';
+  try {
+    const r = await fetch('/api/query', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+    const j = await r.json();
+    if (!j.job) throw new Error(JSON.stringify(j));
+    poll(j.job);
+  } catch(e) {
+    document.getElementById('ptext').textContent = '提交失败: ' + e.message;
+    btn.disabled = false;
+  }
+};
+
+function poll(jid) {
+  timer = setInterval(async () => {
+    try {
+      const r = await fetch('/api/job?id=' + jid);
+      const j = await r.json();
+      const pct = j.total ? Math.round(j.done / j.total * 100) : 0;
+      document.getElementById('ptext').textContent = `查询中… ${j.done}/${j.total}`;
+      document.getElementById('pbar').style.width = pct + '%';
+      if (j.status === 'done') {
+        clearInterval(timer);
+        document.getElementById('run').disabled = false;
+        document.getElementById('ptext').textContent = `完成（${j.elapsed}s）`;
+        render(j);
+      }
+    } catch(e) { /* 继续轮询 */ }
+  }, 1200);
+}
+
+function render(job) {
+  LAST = job;
+  const box = document.getElementById('results');
+  box.innerHTML = '';
+  let nzCount = 0, totalUsd = 0;
+  (job.results || []).forEach(r => {
+    const nz = (r.rows||[]).filter(x => x.balance && x.balance > 0);
+    const toks = (r.tokens||[]);
+    const hasNz = nz.length || toks.length;
+    if (hasNz) nzCount++;
+    totalUsd += (r.total_usd || 0);
+    const card = document.createElement('div');
+    card.className = 'res';
+    let html = `<h3>${hasNz ? '🟢' : '⚪'} ${esc((r.label||'').slice(0,60))}${r.total_usd ? ` <span class="tag">≈$${r.total_usd}</span>` : ''}</h3>`;
+    if (r.error) html += `<div class="err">${esc(r.error)}</div>`;
+    html += `<div class="meta">${esc(r.addresses ? Object.entries(r.addresses).filter(([k])=>k!=='_kind').map(([k,v])=>k+': '+v).join('  ·  ') : '')}</div>`;
+    html += `<table><tr><th>链</th><th>地址</th><th>余额</th><th>≈USD</th></tr>`;
+    (r.rows||[]).forEach(x => {
+      html += `<tr class="${x.balance>0?'nz':''}"><td>${x.chain}</td><td class="mono">${esc(x.address)}</td><td>${esc(x.display)}</td><td>${x.usd?('$'+x.usd.toFixed(2)):'—'}</td></tr>`;
+    });
+    html += `</table>`;
+    if (toks.length) {
+      html += `<table class="tok"><tr><th>代币</th><th>链</th><th>数量</th><th>≈USD</th><th>合约</th></tr>`;
+      toks.forEach(t => {
+        html += `<tr><td>${esc(t.symbol||'?')}</td><td>${t.chain}</td><td>${t.amount}</td><td>${t.usd?('$'+Number(t.usd).toFixed(2)):'—'}</td><td class="mono">${esc(t.contract)}</td></tr>`;
+      });
+      html += `</table>`;
+    }
+    card.innerHTML = html;
+    box.appendChild(card);
+  });
+  document.getElementById('sumNz').textContent = nzCount;
+  document.getElementById('sumUsd').textContent = '$' + totalUsd.toFixed(2);
+  document.getElementById('sumTime').textContent = (job.elapsed||0) + 's';
+  document.getElementById('summaryPanel').style.display = 'block';
+}
+
+document.getElementById('clear').onclick = () => {
+  document.getElementById('mnemonics').value = '';
+  document.getElementById('addresses').value = '';
+  document.getElementById('results').innerHTML = '';
+  document.getElementById('summaryPanel').style.display = 'none';
+  document.getElementById('progress').style.display = 'none';
+};
+
+function download(name, text, mime) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type: mime}));
+  a.download = name;
+  a.click();
+}
+
+document.getElementById('expJson').onclick = () => {
+  if (LAST) download('chainquery_result.json', JSON.stringify(LAST, null, 1), 'application/json');
+};
+document.getElementById('expCsv').onclick = () => {
+  if (!LAST) return;
+  const lines = ['label,chain,address,balance,display,usd,type'];
+  (LAST.results||[]).forEach(r => {
+    (r.rows||[]).forEach(x => lines.push([r.label, x.chain, x.address, x.balance ?? '', `"${x.display}"`, x.usd ?? '', 'native'].join(',')));
+    (r.tokens||[]).forEach(t => lines.push([r.label, t.chain, t.contract, t.amount, `"${t.symbol||'?'}"`, t.usd ?? '', 'token'].join(',')));
+  });
+  download('chainquery_result.csv', '\ufeff' + lines.join('\n'), 'text/csv');
+};
+</script>
+</body>
+</html>

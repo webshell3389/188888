@@ -8,6 +8,7 @@ import { fmtBytes, tsShort } from '@/utils/format'
 const items = ref<FePhoto[]>([])
 const loading = ref(false)
 const preview = ref<FePhoto | null>(null)
+const kw = ref('')
 
 async function load() {
   loading.value = true
@@ -22,7 +23,16 @@ async function load() {
 }
 onMounted(load)
 
-const totalSize = computed(() => items.value.reduce((a, p) => a + (Number(p.size) || 0), 0))
+/** 按文件名/时间过滤 */
+const filtered = computed(() => {
+  const k = kw.value.trim().toLowerCase()
+  if (!k) return items.value
+  return items.value.filter((p) =>
+    [p.filename, p.ts].some((x) => String(x ?? '').toLowerCase().includes(k)),
+  )
+})
+
+const totalSize = computed(() => filtered.value.reduce((a, p) => a + (Number(p.size) || 0), 0))
 </script>
 
 <template>
@@ -30,17 +40,20 @@ const totalSize = computed(() => items.value.reduce((a, p) => a + (Number(p.size
     <div class="app-card__head">
       <h3 class="app-card__title">
         <el-icon><Picture /></el-icon>照片
-        <span class="chip">{{ items.length }} 张</span>
+        <span class="chip">{{ filtered.length }} / {{ items.length }} 张</span>
         <span class="chip mono">{{ fmtBytes(totalSize) }}</span>
       </h3>
-      <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+      <div class="row row--wrap">
+        <el-input v-model="kw" size="small" clearable placeholder="过滤文件名 / 时间" style="width: 200px" />
+        <el-button size="small" :loading="loading" @click="load">刷新</el-button>
+      </div>
     </div>
 
     <div class="app-card__body">
-      <EmptyState v-if="!items.length && !loading" text="暂无照片回传（ph 端点）" />
+      <EmptyState v-if="!filtered.length && !loading" text="暂无照片回传（ph 端点）" />
 
       <div v-else class="grid">
-        <div v-for="(p, i) in items" :key="i" class="ph" @click="preview = p">
+        <div v-for="(p, i) in filtered" :key="i" class="ph" @click="preview = p">
           <div class="ph__thumb">
             <el-image :src="p.url" fit="cover" loading="lazy" :preview-src-list="[p.url || '']">
               <template #error>

@@ -3,6 +3,7 @@ import { onMounted } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { bus, EVT } from '@/utils/bus'
+import { getApiBase } from '@/api/http'
 import LoginView from '@/views/LoginView.vue'
 
 const ui = useUiStore()
@@ -10,8 +11,16 @@ const auth = useAuthStore()
 
 onMounted(async () => {
   ui.applyTheme()
-  bus.on(EVT.NETWORK_ERROR, () => {
-    ui.setError('network', '无法连接后端（检查 9001 端口是否存活）')
+  bus.on(EVT.NETWORK_ERROR, (_p) => {
+    // 全局兜底（dash 轮询有自己的细分提示，此处覆盖其余接口）。
+    // axios 超时的 err.message 形如 "timeout of 25000ms exceeded"，据此区分：
+    // 后端卡住（多半等 DB）≠ 服务未启动，避免误导排查方向。
+    const payload = _p as { message?: string } | undefined
+    const raw = String(payload?.message || '')
+    const hint = raw.includes('timeout')
+      ? '后端响应超时 —— 服务在运行，大概率卡在数据库'
+      : '网络中断或服务未启动'
+    ui.setError('network', `后端请求失败：${getApiBase() || location.origin}（${hint}）`)
   })
   await auth.check()
 })

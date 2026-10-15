@@ -13,7 +13,7 @@ const dash = useDashStore()
 const ui = useUiStore()
 const auth = useAuthStore()
 
-const title = computed(() => (route.meta?.title as string) || '控制台')
+const title = computed(() => (route.meta?.title as string) || '企业数据安全运维')
 const desc = computed(() => (route.meta?.desc as string) || '')
 
 const intervals = [

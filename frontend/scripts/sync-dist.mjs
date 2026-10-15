@@ -16,7 +16,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const dist = join(root, 'dist')
 
 const TARGETS = {
-  go: resolve(root, '..', 'www', 'admin'),
+  go: resolve(root, '..', 'adminui'),
   python: resolve(root, '..', 'boot-analysis', 'backend', 'frontend'),
 }
 

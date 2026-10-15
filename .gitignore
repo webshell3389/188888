@@ -30,6 +30,12 @@
 # 本地配置覆盖（真实口令/DB 密码所在）
 /mockc2_settings.json
 
+# Telegram bot 自管配置（真实 bot token / LLM key 所在）
+/telegram_settings.json
+
+# 命令编排自管配置（真实规则所在）
+/orchestrator_settings.json
+
 # 日志与临时
 /_srv*.out
 /_srv*.err

@@ -12,7 +12,8 @@ import (
 )
 
 // backfillFolders 需要完整解析落库的回传端点。
-var backfillFolders = []string{"u", "war", "nb", "a", "result"}
+// beacon 也在内：beacon 携带 device_info，回填可为"只有 beacon"的历史设备补出档案。
+var backfillFolders = []string{"u", "war", "nb", "a", "beacon", "result"}
 
 // BackfillFull 扫描 capture/<ep>/ 下 .json，对每个文件找到（或补建）packets 指针
 // 后执行 ProcessFull。返回各端点解析文件数。任一步失败静默跳过。
@@ -45,8 +46,9 @@ func BackfillFull(captureRoot string) map[string]any {
 				continue
 			}
 			if pid == 0 {
-				// 未索引的存量文件：先补 packets 指针，再解析（同指纹历史重复的 dup 落 TRUE 但内容一致，幂等）。
-				pid, _ = RecordPacket(ep, rel, len(raw), raw)
+			// 未索引的存量文件：先补 packets 指针，再解析（同指纹历史重复的 dup 落 TRUE 但内容一致，幂等）。
+			// 历史文件来源 IP 不可考，srcIP 传空（列表回退 nearestIPAt 推断）。
+			pid, _ = RecordPacket(ep, rel, len(raw), raw, "")
 			}
 			if pid == 0 {
 				continue

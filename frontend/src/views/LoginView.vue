@@ -1,22 +1,28 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Lock, Key, Cpu } from '@element-plus/icons-vue'
+import { Lock, Key, User, Cpu } from '@element-plus/icons-vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
+const user = ref(localStorage.getItem('mockc2_admin_user') || 'admin')
 const pw = ref('')
 const busy = ref(false)
 
 async function submit() {
+  if (!user.value.trim()) {
+    ElMessage.warning('请输入账号')
+    return
+  }
   if (!pw.value) {
     ElMessage.warning('请输入管理口令')
     return
   }
   busy.value = true
   try {
-    const ok = await auth.login(pw.value)
-    if (!ok) ElMessage.error(auth.error || '登录失败')
+    const ok = await auth.login(user.value.trim(), pw.value)
+    if (ok) localStorage.setItem('mockc2_admin_user', user.value.trim())
+    else ElMessage.error(auth.error || '登录失败')
   } finally {
     busy.value = false
   }
@@ -32,15 +38,8 @@ async function submit() {
         <div class="brand__logo">
           <el-icon :size="26"><Cpu /></el-icon>
         </div>
-        <h1>Mock C2 控制台</h1>
-        <p class="brand__sub">受授权靶场 · 交付链与遥测运维面</p>
-
-        <ul class="brand__list">
-          <li><span>01</span>单一数据源：<code>/__dash/api</code></li>
-          <li><span>02</span>只读查询面：<code>/__q/*</code> · <code>/panel/api/*</code></li>
-          <li><span>03</span>指令只做武装 / 清空 / peek，分发由设备 beacon 领走</li>
-          <li><span>04</span>会话为后端 HttpOnly Cookie（12h 滑动）</li>
-        </ul>
+        <h1>企业数据安全运维</h1>
+        <p class="brand__sub">受授权范围专用</p>
       </div>
       <div class="brand__foot">LAN RANGE · AUTHORIZED USE ONLY</div>
     </aside>
@@ -49,9 +48,19 @@ async function submit() {
     <main class="login__form">
       <div class="card">
         <h2>登录</h2>
-        <p class="card__sub">请输入后端管理口令（<code>admin_password</code>）</p>
+        <p class="card__sub">请输入管理员账号与口令</p>
 
         <el-form @submit.prevent="submit">
+          <el-form-item>
+            <el-input
+              v-model="user"
+              size="large"
+              placeholder="账号"
+              :prefix-icon="User"
+              autofocus
+              @keyup.enter="submit"
+            />
+          </el-form-item>
           <el-form-item>
             <el-input
               v-model="pw"
@@ -60,21 +69,16 @@ async function submit() {
               show-password
               placeholder="管理口令"
               :prefix-icon="Lock"
-              autofocus
               @keyup.enter="submit"
             />
           </el-form-item>
           <el-button type="primary" size="large" :loading="busy" style="width: 100%" @click="submit">
             <el-icon v-if="!busy"><Key /></el-icon>
-            <span>{{ busy ? '校验中…' : '进入控制台' }}</span>
+            <span>{{ busy ? '校验中…' : '登录' }}</span>
           </el-button>
         </el-form>
 
         <p v-if="auth.error" class="card__err">{{ auth.error }}</p>
-
-        <div class="card__hint">
-          口令错误会在后端 <code>control.jsonl</code> 留痕（<code>auth_fail</code>），可用于爆破观测演练。
-        </div>
       </div>
     </main>
   </div>
@@ -138,36 +142,6 @@ async function submit() {
   margin: 6px 0 0;
   color: #93a6c0;
   font-size: var(--fs-md);
-}
-.brand__list {
-  margin: var(--sp-8) 0 0;
-  padding: 0;
-  list-style: none;
-  display: grid;
-  gap: var(--sp-3);
-  max-width: 460px;
-}
-.brand__list li {
-  display: flex;
-  gap: var(--sp-3);
-  align-items: flex-start;
-  font-size: var(--fs-md);
-  color: #b9c8dc;
-  line-height: 1.7;
-}
-.brand__list span {
-  font-family: var(--font-mono);
-  color: #6cb6ff;
-  font-size: var(--fs-sm);
-  padding-top: 2px;
-}
-.brand__list code {
-  font-family: var(--font-mono);
-  font-size: var(--fs-sm);
-  padding: 1px 6px;
-  border-radius: var(--r-sm);
-  background: rgba(255, 255, 255, 0.08);
-  color: #dce7f5;
 }
 .brand__foot {
   position: relative;

@@ -199,10 +199,11 @@ func (q *CommandQueue) TakeFor(ids []string) map[string]any {
 // 展开：uuid(U)→listed_ip(U)、listed_ip(C)→uuid(C)，去重后保持 uuid → ip → 别名 → '*' 顺序。
 //
 // 性能（INC-2026-0929-001 根因修复）：
-//   旧版在此调用 ListDevices()（8+ 次全量聚合，含 access_log 全表 GROUP BY），
-//   每次 /beacon 都触发且无并发上限 → 76 goroutine 堆积 → GC 死亡螺旋。
-//   新版：(1) 改用轻量 uuid↔ip 映射（单查询 + 2s TTL 缓存）→ §6.1/§6.3；
-//         (2) 信号量硬上限 + 快速失败，宁可不展开别名也不堆积 → §6.2。
+//
+//	旧版在此调用 ListDevices()（8+ 次全量聚合，含 access_log 全表 GROUP BY），
+//	每次 /beacon 都触发且无并发上限 → 76 goroutine 堆积 → GC 死亡螺旋。
+//	新版：(1) 改用轻量 uuid↔ip 映射（单查询 + 2s TTL 缓存）→ §6.1/§6.3；
+//	      (2) 信号量硬上限 + 快速失败，宁可不展开别名也不堆积 → §6.2。
 func (q *CommandQueue) expandCands(ids []string) []string {
 	// §6.2 并发上限 + 快速失败：拿不到槽位就在 expandWait 内退化为原始身份 + 广播。
 	select {

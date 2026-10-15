@@ -9,27 +9,51 @@ import { pctClass, shortIP, tsShort, uaLabel } from '@/utils/format'
 /**
  * 访问设备：sync 信标（boot.html 入口）登记的访客台账（devices 表，按 ip+设备版本去重）。
  * 交付进度（阶段权重表）属于这个模块；展示为单一访问设备列表。
+ *
+ * 分页纪律（性能契约）：
+ *  - 服务端分页，每页 20 条；筛选（kw）下推后端。
+ *    翻页/筛选只拉一页，禁止一次性回传全量（旧版 visits(500) 全加载是页面卡顿主因）。
+ *  - dash 轮询触发的自动刷新只重拉当前页；页码越界自动回退最后一页。
  */
 const dash = useDashStore()
 
 const records = ref<VisitorRow[]>([])
-const total = ref(0)
+/** 当前筛选条件下的总行数（分页总数） */
+const totalRows = ref(0)
+/** 去重来访数（全量口径，头部 chip） */
+const totalVisits = ref(0)
 const loading = ref(false)
 const kw = ref('')
+const page = ref(1)
+const per = ref(20)
 const progressRows = ref<Array<Record<string, unknown>>>([])
 
+// 竞态序号：翻页/轮询并发时，过期响应直接丢弃
+let loadSeq = 0
+
 async function load() {
+  const my = ++loadSeq
   loading.value = true
   try {
-    const [v, p] = await Promise.all([panelApi.visits(500), panelApi.progress()])
+    const [v, p] = await Promise.all([
+      panelApi.visits(kw.value.trim(), page.value, per.value),
+      panelApi.progress(),
+    ])
+    if (my !== loadSeq) return
     records.value = v?.records ?? []
-    total.value = Number(v?.total ?? 0)
+    totalRows.value = Number(v?.total ?? 0)
+    totalVisits.value = Number(v?.total_visits ?? v?.total ?? 0)
     progressRows.value = Array.isArray(p?.rows) ? p.rows : []
+    // 删除/筛选后页码越界：回退最后一页（page watcher 触发重拉）
+    const maxPage = Math.max(1, Math.ceil(totalRows.value / per.value))
+    if (page.value > maxPage) page.value = maxPage
   } catch {
-    records.value = []
-    progressRows.value = []
+    if (my === loadSeq) {
+      records.value = []
+      progressRows.value = []
+    }
   } finally {
-    loading.value = false
+    if (my === loadSeq) loading.value = false
   }
 }
 
@@ -43,6 +67,21 @@ watch(
   },
 )
 
+// 筛选变化（300ms 防抖）：回第 1 页。page 未变时显式重拉，避免漏触发。
+let kwTimer: number | undefined
+watch(kw, () => {
+  window.clearTimeout(kwTimer)
+  kwTimer = window.setTimeout(() => {
+    if (page.value === 1) void load()
+    else page.value = 1 // [page] watcher 触发 load
+  }, 300)
+})
+
+// 翻页 / 每页条数：ref 变化统一触发（Vue 同 tick 批处理，不会双发）
+watch([page, per], () => {
+  void load()
+})
+
 const progressMap = computed(() => {
   const m = new Map<string, { pct: number; stage: string }>()
   for (const r of progressRows.value) {
@@ -53,16 +92,6 @@ const progressMap = computed(() => {
   return m
 })
 
-const filtered = computed(() => {
-  const k = kw.value.trim().toLowerCase()
-  if (!k) return records.value
-  return records.value.filter((d) =>
-    [d.ip, d.device_version, d.domain, d.host, d.ua]
-      .map((x) => String(x ?? '').toLowerCase())
-      .some((x) => x.includes(k)),
-  )
-})
-
 const withProgress = computed(() => progressMap.value.size)
 </script>
 
@@ -71,7 +100,8 @@ const withProgress = computed(() => progressMap.value.size)
     <div class="app-card__head">
       <h3 class="app-card__title">
         <el-icon><User /></el-icon>访问设备
-        <span class="chip">去重来访 {{ total }}</span>
+        <span class="chip">去重来访 {{ totalVisits }}</span>
+        <span class="chip">共 {{ totalRows }} 条</span>
         <span class="chip chip--ok">有交付进度 {{ withProgress }}</span>
       </h3>
       <div class="row row--wrap">
@@ -82,7 +112,7 @@ const withProgress = computed(() => progressMap.value.size)
     </div>
 
     <div class="app-card__body app-card__body--flush">
-      <el-table :data="filtered" size="small" height="calc(100vh - 230px)" empty-text="…">
+      <el-table :data="records" size="small" height="calc(100vh - 285px)" empty-text="…">
         <el-table-column prop="ip" label="IP" width="170">
           <template #default="{ row }"><span class="mono ellipsis" :title="row.ip">{{ shortIP(row.ip) }}</span></template>
         </el-table-column>
@@ -119,6 +149,18 @@ const withProgress = computed(() => progressMap.value.size)
         </el-table-column>
         <template #empty><EmptyState text="暂无访问设备（boot.html 入口尚未有来访）" /></template>
       </el-table>
+
+      <div class="pager">
+        <el-pagination
+          v-model:current-page="page"
+          v-model:page-size="per"
+          :total="totalRows"
+          :page-sizes="[20, 50, 100]"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+          size="small"
+        />
+      </div>
     </div>
   </section>
 </template>
@@ -140,5 +182,11 @@ const withProgress = computed(() => progressMap.value.size)
   text-align: right;
   font-size: var(--fs-sm);
   color: var(--text-2);
+}
+/* 分页条：右侧对齐，与表格分离 */
+.pager {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px;
 }
 </style>

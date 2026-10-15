@@ -1,0 +1,18 @@
+{
+  "enabled": true,
+  "bot_token": "123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11",
+  "chat_ids": ["123456789"],
+  "events": ["beacon", "a", "war", "result"],
+  "allow_control": false,
+  "poll_timeout": 30,
+  "rate_ms": 800,
+
+  "llm": {
+    "enabled": false,
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "",
+    "model": "gpt-4o-mini",
+    "system_prompt": "",
+    "timeout": 60
+  }
+}

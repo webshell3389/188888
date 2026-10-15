@@ -22,9 +22,7 @@ function badgeOf(path: string): number | null {
     case '/keychain':
       return dash.wallets.length || null
     case '/photos':
-      return c.ph ?? null
-    case '/apps':
-      return c.u ?? null
+      return (c.p ?? c.ph) ?? null
     case '/logs':
       return dash.logs.length || null
     default:
@@ -45,8 +43,8 @@ const groups = computed(() =>
     <div class="side__brand">
       <div class="side__logo"><el-icon :size="18"><Cpu /></el-icon></div>
       <div v-show="!collapsed" class="side__name">
-        <b>Mock C2</b>
-        <span>运维控制台</span>
+        <b>企业数据安全运维</b>
+        <span>数据安全运维平台</span>
       </div>
     </div>
 

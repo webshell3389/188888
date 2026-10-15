@@ -7,9 +7,9 @@ import type { AuthMe } from './types'
  */
 
 export const authApi = {
-  /** Go 版只取 password；Python 版兼容 username+password，故两者都带 */
-  login(password: string) {
-    return post<{ ok?: boolean; error?: string }>('/__auth/login', { username: 'admin', password })
+  /** 账号 + 口令登录（username 缺省由后端按配置账号处理） */
+  login(username: string, password: string) {
+    return post<{ ok?: boolean; error?: string }>('/__auth/login', { username, password })
   },
   logout() {
     return post<{ ok?: boolean }>('/__auth/logout')

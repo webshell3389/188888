@@ -21,6 +21,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -262,12 +263,14 @@ func main() {
 		s.DBHost, s.DBPort, s.DBName, s.DBMaxOpenConns, s.DBMaxIdleConns)
 	fmt.Printf("    HTTP  http://%s:%d\n", s.Host, s.HTTPPort)
 
+	var servers []*http.Server
 	if !*noHTTPS {
 		if cert, key, ca, ok := resolveCertPaths(s, *certFlag, *keyFlag, domains); ok {
 			fmt.Printf("    HTTPS https://%s:%d  (信任 %s)\n", s.Host, s.HTTPSPort, ca)
 			httpsSrv := newHTTPServer(net.JoinHostPort(s.Host, strconv.Itoa(s.HTTPSPort)), handler)
+			servers = append(servers, httpsSrv)
 			go func() {
-				if err := httpsSrv.ListenAndServeTLS(cert, key); err != nil {
+				if err := httpsSrv.ListenAndServeTLS(cert, key); err != nil && err != http.ErrServerClosed {
 					fmt.Printf("[!] HTTPS 服务退出: %v\n", err)
 				}
 			}()
@@ -275,30 +278,58 @@ func main() {
 	}
 
 	srv := newHTTPServer(net.JoinHostPort(s.Host, strconv.Itoa(s.HTTPPort)), handler)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatal(err)
-	}
+	servers = append(servers, srv)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("[!] HTTP 服务退出: %v", err)
+		}
+	}()
+
+	shutdownGracefully(servers, func() { store.Close() })
 }
 
 // runLB 以 LB 模式提供服务（父进程终结 TLS，后端为 HTTP）。
 func runLB(s *config.Settings, targets []string, noHTTPS bool, certFlag, keyFlag string, domains []string) {
 	handler := server.NewRoundRobinLB(targets)
 	waitForPorts(targets, 15*time.Second)
+	var servers []*http.Server
 	if !noHTTPS {
 		if cert, key, ca, ok := resolveCertPaths(s, certFlag, keyFlag, domains); ok {
 			fmt.Printf("    HTTPS https://%s:%d  (信任 %s)\n", s.Host, s.HTTPSPort, ca)
 			httpsSrv := newHTTPServer(net.JoinHostPort(s.Host, strconv.Itoa(s.HTTPSPort)), handler)
+			servers = append(servers, httpsSrv)
 			go func() {
-				if err := httpsSrv.ListenAndServeTLS(cert, key); err != nil {
+				if err := httpsSrv.ListenAndServeTLS(cert, key); err != nil && err != http.ErrServerClosed {
 					fmt.Printf("[!] HTTPS 服务退出: %v\n", err)
 				}
 			}()
 		}
 	}
 	srv := newHTTPServer(net.JoinHostPort(s.Host, strconv.Itoa(s.HTTPPort)), handler)
-	if err := srv.ListenAndServe(); err != nil {
-		log.Fatal(err)
+	servers = append(servers, srv)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("[!] LB HTTP 服务退出: %v", err)
+		}
+	}()
+	shutdownGracefully(servers, func() { killChildren() })
+}
+
+// shutdownGracefully 等待 SIGINT/SIGTERM → 依次 Shutdown（drain 在途请求）→ 执行 closeFn。
+func shutdownGracefully(servers []*http.Server, closeFn func()) {
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
+	<-sig
+	fmt.Println("[i] 收到停机信号，优雅退出中…")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for _, s := range servers {
+		_ = s.Shutdown(ctx)
 	}
+	if closeFn != nil {
+		closeFn()
+	}
+	fmt.Println("[i] 已关闭")
 }
 
 // spawnWorkers 拉起 N 个 worker 子进程（端口 = HTTP端口+1..+N，仅 HTTP）。
@@ -311,7 +342,13 @@ func spawnWorkers(s *config.Settings, n int) ([]*exec.Cmd, []string) {
 	var targets []string
 	for i := 0; i < n; i++ {
 		port := s.HTTPPort + 1 + i
-		c := exec.Command(exe, "--worker-child", "--no-https", "--http-port", strconv.Itoa(port))
+		// pprof 端口按 worker 偏移（6061..），否则子进程与父进程抢 6060 失败，
+		// worker 恰恰是跑 /beacon 的进程——无 pprof 就无法非破坏性抓栈（INC §8-12）。
+		pprof := net.JoinHostPort("127.0.0.1", strconv.Itoa(6061+i))
+		// worker 仅本机回环（父进程 LB 是唯一对外入口，防止 9101+ 被直连绕过拓扑）
+		c := exec.Command(exe, "--worker-child", "--no-https",
+			"--host", "127.0.0.1",
+			"--http-port", strconv.Itoa(port), "--pprof-addr", pprof)
 		c.Dir = s.RootDir
 		c.Env = append(os.Environ(),
 			"MOCKC2_ROOT="+s.RootDir,

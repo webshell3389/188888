@@ -19,12 +19,14 @@ function load(): UiState {
     theme: 'dark',
     collapsed: false,
     density: 'comfortable',
-    refreshMs: 2000,
+    refreshMs: 5000,
     autoRefresh: true,
   }
   try {
     const raw = localStorage.getItem(KEY)
     if (raw) Object.assign(base, JSON.parse(raw))
+    // 迁移：旧默认 2000ms 过密（比后端快照缓存还快 → 每次轮询都回源），统一抬到 5000ms
+    if (Number(base.refreshMs) < 3000) base.refreshMs = 5000
   } catch {
     /* 忽略损坏的本地配置 */
   }

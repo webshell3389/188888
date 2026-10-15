@@ -5,7 +5,6 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -187,30 +186,116 @@ func auditLoop() {
 	}
 }
 
-// ── 传输压缩：大静态 JS（pe/sbx/rce）≈ -82% 字节 ──
+// ── 传输压缩：流式 gzip（不整包缓冲）──
+//
+// 旧实现把整个响应体 buf 进内存再判断是否 gzip：大 JS payload（pe/sbx/rce）每次请求
+// 都要在中间件层整包驻留一份 + 重新压缩，并发高时内存与延迟双涨。
+// 改为：前 2048 字节缓冲用于判阈值，超过即切 gzip.NewWriter 流式直写；小响应(<2KB)
+// 与不可压缩/下载内容直通不压。File read 由 OS page cache 承接，不再每请求重复整包拷贝。
+
+const gzipThreshold = 2048
+
+// compressibleContentType 判是否值得 gzip：文本/JSON/JS 压；媒体/二进制/下载直通。
+func compressibleContentType(ct string) bool {
+	if ct == "" {
+		return true
+	}
+	if i := strings.IndexByte(ct, ';'); i >= 0 {
+		ct = ct[:i]
+	}
+	ct = strings.ToLower(strings.TrimSpace(ct))
+	switch {
+	case strings.HasPrefix(ct, "image/"),
+		strings.HasPrefix(ct, "video/"),
+		strings.HasPrefix(ct, "audio/"):
+		return false
+	case ct == "application/octet-stream",
+		ct == "application/zip",
+		ct == "application/gzip",
+		ct == "application/x-gzip",
+		ct == "application/x-tar":
+		return false
+	}
+	return true
+}
 
 type gzipResponseWriter struct {
 	http.ResponseWriter
 	buf         bytes.Buffer
+	gz          *gzip.Writer
 	status      int
 	wroteHeader bool
+	compress    bool
 }
 
 func (g *gzipResponseWriter) Header() http.Header { return g.ResponseWriter.Header() }
 
 func (g *gzipResponseWriter) WriteHeader(code int) {
-	if !g.wroteHeader {
-		g.status = code
-		g.wroteHeader = true
+	if g.wroteHeader {
+		return
 	}
+	g.wroteHeader = true
+	g.status = code
+	ct := g.ResponseWriter.Header().Get("Content-Type")
+	cd := g.ResponseWriter.Header().Get("Content-Disposition")
+	if code == http.StatusNoContent || code == http.StatusNotModified ||
+		strings.Contains(cd, "attachment") || !compressibleContentType(ct) {
+		g.compress = false
+		g.ResponseWriter.WriteHeader(code)
+		return
+	}
+	g.compress = true // 先记状态；超阈值才真正写头
 }
 
 func (g *gzipResponseWriter) Write(b []byte) (int, error) {
 	if !g.wroteHeader {
-		g.status = 200
-		g.wroteHeader = true
+		g.WriteHeader(http.StatusOK)
 	}
-	return g.buf.Write(b)
+	if !g.compress {
+		return g.ResponseWriter.Write(b)
+	}
+	if g.gz == nil {
+		if g.buf.Len()+len(b) < gzipThreshold {
+			return g.buf.Write(b)
+		}
+		h := g.ResponseWriter.Header()
+		h.Set("Content-Encoding", "gzip")
+		h.Add("Vary", "Accept-Encoding")
+		h.Del("Content-Length")
+		g.ResponseWriter.WriteHeader(g.status)
+		g.gz = gzip.NewWriter(g.ResponseWriter)
+		if g.buf.Len() > 0 {
+			if _, err := g.gz.Write(g.buf.Bytes()); err != nil {
+				return 0, err
+			}
+			g.buf.Reset()
+		}
+	}
+	return g.gz.Write(b)
+}
+
+func (g *gzipResponseWriter) Flush() {
+	if g.gz != nil {
+		_ = g.gz.Flush()
+	}
+	if f, ok := g.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// close 冲刷：gzip 流关闭；小响应补写未压缩头+体。
+func (g *gzipResponseWriter) close() error {
+	if g.gz != nil {
+		return g.gz.Close()
+	}
+	if g.compress {
+		g.ResponseWriter.WriteHeader(g.status)
+		if g.buf.Len() > 0 {
+			_, err := g.ResponseWriter.Write(g.buf.Bytes())
+			return err
+		}
+	}
+	return nil
 }
 
 func gzipMiddleware(next http.Handler) http.Handler {
@@ -220,31 +305,7 @@ func gzipMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		gw := &gzipResponseWriter{ResponseWriter: w}
+		defer func() { _ = gw.close() }()
 		next.ServeHTTP(gw, r)
-
-		h := w.Header()
-		body := gw.buf.Bytes()
-		status := gw.status
-		if status == 0 {
-			status = 200
-		}
-		if status == http.StatusNoContent || status == http.StatusNotModified {
-			w.WriteHeader(status)
-			return
-		}
-		if len(body) >= 2048 && h.Get("Content-Encoding") == "" {
-			h.Set("Content-Encoding", "gzip")
-			h.Del("Content-Length")
-			w.WriteHeader(status)
-			gz := gzip.NewWriter(w)
-			_, _ = gz.Write(body)
-			_ = gz.Close()
-			return
-		}
-		if h.Get("Content-Length") == "" {
-			h.Set("Content-Length", strconv.Itoa(len(body)))
-		}
-		w.WriteHeader(status)
-		_, _ = w.Write(body)
 	})
 }

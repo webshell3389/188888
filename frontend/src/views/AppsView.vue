@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { panelApi } from '@/api/panel'
 import type { AppRow } from '@/api/types'
 import EmptyState from '@/components/EmptyState.vue'
 import { clip, fmtInt, tsShort } from '@/utils/format'
 
-/** 应用资产：u 端点回传的已安装应用清单（bundleId / 名称 / lhu）。 */
+/**
+ * 应用资产：u 端点回传的已安装应用清单（bundleId / 名称 / lhu）。
+ * 行内「设备 UUID」= 设备列表的设备标识（lhu），点击可跳转「我的设备」并自动筛选；
+ * 「App UUID」= 单个应用实例自己的 uuid（app_uuid），与设备标识无关，仅展示。
+ */
+const route = useRoute()
+const router = useRouter()
+
 const rows = ref<AppRow[]>([])
 const total = ref(0)
 const page = ref(1)
@@ -32,7 +40,18 @@ function search() {
   void load()
 }
 
-onMounted(load)
+/** 设备 UUID → 跳转「我的设备」自动筛选该设备 */
+function gotoDevice(lhu: string) {
+  if (!lhu) return
+  void router.push({ path: '/devices', query: { kw: lhu } })
+}
+
+onMounted(() => {
+  // 支持从其它模块带 ?kw= 跳入（如设备列表反向跳转）
+  const q = String(route.query.kw ?? '')
+  if (q) kw.value = q
+  void load()
+})
 </script>
 
 <template>
@@ -43,8 +62,8 @@ onMounted(load)
         <span class="chip">共 {{ fmtInt(total) }}</span>
       </h3>
       <div class="row">
-        <el-input v-model="kw" size="small" placeholder="过滤 bundleId / 名称 / lhu" clearable style="width: 280px"
-          @keyup.enter="search" />
+        <el-input v-model="kw" size="small" placeholder="过滤 bundleId / 名称 / 设备 UUID" clearable
+          style="width: 280px" @keyup.enter="search" />
         <el-button size="small" type="primary" @click="search">查询</el-button>
         <el-button size="small" :loading="loading" @click="load">刷新</el-button>
       </div>
@@ -58,10 +77,15 @@ onMounted(load)
             <span class="mono t-2 break-all">{{ row.bundleId || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column prop="lhu" label="lhu" width="160">
-          <template #default="{ row }"><span class="mono t-3">{{ row.lhu || '-' }}</span></template>
+        <el-table-column prop="lhu" label="设备 UUID" width="170">
+          <template #default="{ row }">
+            <span v-if="row.lhu" class="mono uuid-link" title="点击跳转该设备" @click="gotoDevice(String(row.lhu))">
+              {{ clip(String(row.lhu), 16) }}
+            </span>
+            <span v-else class="t-3">-</span>
+          </template>
         </el-table-column>
-        <el-table-column prop="uuid" label="uuid" width="160">
+        <el-table-column prop="uuid" label="App UUID" width="160">
           <template #default="{ row }"><span class="mono t-3">{{ clip(row.uuid, 20) }}</span></template>
         </el-table-column>
         <el-table-column prop="ts" label="回传时间" width="160">
@@ -82,6 +106,16 @@ onMounted(load)
 </template>
 
 <style scoped>
+.uuid-link {
+  cursor: pointer;
+  color: var(--text-2);
+  transition: color .15s;
+  word-break: break-all;
+}
+.uuid-link:hover {
+  color: var(--brand-2);
+  text-decoration: underline;
+}
 .pager {
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--border);

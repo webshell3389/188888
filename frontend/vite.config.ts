@@ -20,14 +20,10 @@ export default defineConfig(({ mode }) => {
     '/__auth',
     '/__control',
     '/panel',
-    '/__stats',
+    '/__metrics',
     '/api/data',
     '/api/file',
-    '/api/activity',
     '/api/stats',
-    '/api/list',
-    '/api/device',
-    '/api/tasks',
   ]) {
     proxy[prefix] = { target, changeOrigin: true, secure: false, ws: false }
   }

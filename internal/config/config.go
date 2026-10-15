@@ -23,7 +23,6 @@ type Settings struct {
 	CaptureRoot  string // 审计留存根
 	CertsDir     string // 自签证书目录
 	DataDir      string // SQLite 目录
-	DashboardDir string // 暗色看板静态根
 	FrontendDir  string // 浅色管理台静态根
 
 	// ── 监听 ──
@@ -44,8 +43,12 @@ type Settings struct {
 	BeaconNoop map[string]any
 	// ops 端点 token（为空则不校验；生产建议设置）
 	OpsToken string
+	// 管理后台授权：登录账号（env MOCKC2_ADMIN_USER）
+	AdminUser string
 	// 管理后台授权：登录口令（MOCKC2_ADMIN_PASSWORD 覆盖；默认 lab 值仅供内网）
 	AdminPassword string
+	// 管理后台入口路径（env MOCKC2_ADMIN_PATH；默认 /admin；建议改为随机密径，避免被扫）
+	AdminPath string
 	// 会话有效期（秒）
 	AdminSessionTTL int
 	// HTTPS 自签证书 SAN
@@ -107,8 +110,7 @@ func Default() *Settings {
 		CaptureRoot:      filepath.Join(root, "capture"),
 		CertsDir:         filepath.Join(root, "certs"),
 		DataDir:          filepath.Join(root, "data"),
-		DashboardDir:     filepath.Join(root, "www", "dashboard"),
-		FrontendDir:      filepath.Join(root, "www", "admin"),
+		FrontendDir:      filepath.Join(root, "adminui"),
 		Host:             "0.0.0.0",
 		HTTPPort:         9100,
 		HTTPSPort:        9443,
@@ -118,7 +120,9 @@ func Default() *Settings {
 		LogSinkStatus:    200,
 		BeaconNoop:       map[string]any{"client_ip": "%PEER_IP%", "type": "noop"},
 		OpsToken:         "",
+		AdminUser:        "admin",
 		AdminPassword:    "lab888",
+		AdminPath:        "/admin",
 		AdminSessionTTL:  12 * 3600,
 		CertDomains:      []string{},
 		LabMode:          false,
@@ -219,8 +223,12 @@ func applyOverrides(s *Settings, o map[string]any) {
 			s.LogSinkStatus = asInt(v, s.LogSinkStatus)
 		case "ops_token":
 			s.OpsToken = asString(v)
+		case "admin_user":
+			s.AdminUser = asString(v)
 		case "admin_password":
 			s.AdminPassword = asString(v)
+		case "admin_path":
+			s.AdminPath = asString(v)
 		case "admin_session_ttl":
 			s.AdminSessionTTL = asInt(v, s.AdminSessionTTL)
 		case "cert_domains":

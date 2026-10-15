@@ -3,11 +3,11 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useDashStore } from '@/stores/dash'
 import { useUiStore } from '@/stores/ui'
 import { useCommandStore } from '@/stores/command'
-import { feApi, type FeActivity } from '@/api/feapi'
+import { feApi } from '@/api/feapi'
 import StatCard from '@/components/StatCard.vue'
 import EChart from '@/components/EChart.vue'
 import EmptyState from '@/components/EmptyState.vue'
-import { fmtInt, statusLevel, shortIP, tsShort, uaLabel, clip } from '@/utils/format'
+import { fmtInt, statusLevel, tsShort } from '@/utils/format'
 import type { EChartsOption } from 'echarts'
 
 const dash = useDashStore()
@@ -15,7 +15,6 @@ const ui = useUiStore()
 const cmd = useCommandStore()
 
 const stats = ref<Record<string, number>>({})
-const activity = ref<FeActivity[]>([])
 
 /** 今日新增（口径与暗色看板一致）：托管设备 first_seen 当日；台账 by /api/stats visitors_today */
 function isNewToday(d: { first_seen?: string }) {
@@ -31,12 +30,6 @@ async function loadFe() {
     stats.value = (await feApi.stats()) as unknown as Record<string, number>
   } catch {
     stats.value = {}
-  }
-  try {
-    const r = await feApi.activity(20)
-    activity.value = r?.items ?? []
-  } catch {
-    activity.value = []
   }
 }
 
@@ -59,7 +52,7 @@ const entityOption = computed<EChartsOption>(() => {
   const rows: Array<[string, number]> = [
     ['备忘录 nb', Number(c.nb || 0)],
     ['钥匙串 war', Number(c.war || 0)],
-    ['照片 ph', Number(c.ph || 0)],
+    ['照片 p', Number(c.p ?? c.ph ?? 0)],
     ['应用清单 u', Number(c.u || 0)],
     ['结果 result', Number(c.result || 0)],
     ['心跳 heartbeat', Number(c.heartbeat || 0)],
@@ -170,8 +163,7 @@ const statusOption = computed<EChartsOption>(() => {
         :tone="cmd.pendingTotal ? 'warn' : 'muted'" foot="按设备独立队列" />
       <StatCard label="备忘录" :value="fmtInt(dash.counts.nb ?? 0)" icon="Notebook" to="/memos" tone="ok" />
       <StatCard label="钥匙串战果" :value="fmtInt(dash.counts.war ?? 0)" icon="Coin" to="/keychain" tone="warn" />
-      <StatCard label="照片" :value="fmtInt(dash.counts.ph ?? 0)" icon="Picture" to="/photos" />
-      <StatCard label="应用清单" :value="fmtInt(dash.counts.u ?? 0)" icon="Grid" to="/apps" />
+      <StatCard label="照片" :value="fmtInt(dash.counts.p ?? dash.counts.ph ?? 0)" icon="Picture" to="/photos" />
       <StatCard label="探针日志" :value="fmtInt(dash.logs.length)" icon="ChatLineSquare" to="/logs" tone="muted" />
     </div>
 
@@ -197,54 +189,6 @@ const statusOption = computed<EChartsOption>(() => {
           <span class="t-3" style="font-size: var(--fs-xs)">入库解析后的语义维度</span>
         </div>
         <div class="app-card__body"><EChart :option="entityOption" :theme-key="ui.theme" height="236px" /></div>
-      </section>
-    </div>
-
-    <div class="grid detail-grid">
-      <section class="app-card">
-        <div class="app-card__head">
-          <h3 class="app-card__title"><el-icon><Clock /></el-icon>活动流（语义化）</h3>
-          <router-link to="/logs" class="t-3" style="font-size: var(--fs-xs)">日志 →</router-link>
-        </div>
-        <div class="app-card__body app-card__body--flush">
-          <el-table :data="activity" size="small" height="300" empty-text="…">
-            <el-table-column prop="ts" label="时间" width="150">
-              <template #default="{ row }"><span class="mono t-3">{{ tsShort(row.ts) }}</span></template>
-            </el-table-column>
-            <el-table-column prop="label" label="事件" min-width="180" />
-            <el-table-column prop="device_uuid" label="设备" width="160">
-              <template #default="{ row }">
-                <span class="mono t-2">{{ clip(row.device_uuid || '-', 22) }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-      </section>
-
-      <section class="app-card">
-        <div class="app-card__head">
-          <h3 class="app-card__title"><el-icon><Monitor /></el-icon>最近设备</h3>
-          <router-link to="/devices" class="t-3" style="font-size: var(--fs-xs)">全部 →</router-link>
-        </div>
-        <div class="app-card__body app-card__body--flush">
-          <el-table :data="dash.devices.slice(0, 40)" size="small" height="300" empty-text="…">
-            <el-table-column prop="ip" label="IP" width="140">
-              <template #default="{ row }"><span class="mono ellipsis" :title="row.ip">{{ shortIP(row.ip) }}</span></template>
-            </el-table-column>
-            <el-table-column label="设备" width="120">
-              <template #default="{ row }"><span class="chip chip--brand">{{ uaLabel(row.ua) }}</span></template>
-            </el-table-column>
-            <el-table-column prop="deviceVersion" label="版本" width="110" />
-            <el-table-column label="域" min-width="160">
-              <template #default="{ row }">
-                <span class="mono t-3 ellipsis">{{ row.domain || '-' }}</span>
-              </template>
-            </el-table-column>
-            <el-table-column label="最后出现" width="150">
-              <template #default="{ row }"><span class="mono t-3">{{ tsShort(row.ts) }}</span></template>
-            </el-table-column>
-          </el-table>
-        </div>
       </section>
     </div>
 
@@ -297,8 +241,5 @@ const statusOption = computed<EChartsOption>(() => {
 }
 .chart-grid {
   grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-}
-.detail-grid {
-  grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
 }
 </style>

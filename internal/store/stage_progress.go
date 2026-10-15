@@ -1,7 +1,9 @@
 package store
 
 import (
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -67,21 +69,26 @@ func containsPath(path, sub string) bool {
 
 // ClientStageProgress 每个 client（IP）到达的最远阶段百分比。
 //
-// 性能（INC-2026-0929-001 §6.1/§6.3）：该查询对 access_log 做全表 GROUP BY，
-// 是设备列表聚合里最重的单条 SQL。ListDevices/看板/进度接口高频调用，
-// 加 2s TTL 缓存把访问日志量级与查询频次解耦（秒级延迟对进度展示完全可接受）。
+// 性能（INC-2026-0929-001 §6.1/§6.3）：该查询对 access_log 做全表 GROUP BY
+// （线上 54 万行，单次约 4~5s），是设备列表聚合里最重的单条 SQL。
+// ListDevices/看板/进度接口高频调用，故加 30s TTL 缓存：
+// 2s 时实测每 2 秒必有一次 5s 重查询，占满连接池导致其它接口排队（刷新卡顿）；
+// 进度是分钟级语义，30s 新鲜度完全够用。
 func ClientStageProgress() map[string]int {
 	return progCache.get()
 }
 
 type progCacheT struct {
-	mu     sync.RWMutex
-	data   map[string]int
-	expire time.Time
+	mu         sync.RWMutex
+	data       map[string]int
+	expire     time.Time
+	refreshing atomic.Bool
 }
 
 var progCache = &progCacheT{}
 
+// get SWR 语义：过期先回旧数据 + 后台异步重算（读路径永不等 4~20s 的全表聚合）；
+// 冷启动（无旧数据）才同步构建一次。与 ListDevices/dashAPICache 同一模式。
 func (c *progCacheT) get() map[string]int {
 	c.mu.RLock()
 	if time.Now().Before(c.expire) {
@@ -89,26 +96,65 @@ func (c *progCacheT) get() map[string]int {
 		c.mu.RUnlock()
 		return d
 	}
+	stale := c.data
 	c.mu.RUnlock()
+
+	if stale != nil {
+		if c.refreshing.CompareAndSwap(false, true) {
+			go func() {
+				defer c.refreshing.Store(false)
+				if d := clientStageProgressRaw(); d != nil {
+					c.mu.Lock()
+					c.data = d
+					c.expire = time.Now().Add(30 * time.Second)
+					c.mu.Unlock()
+				}
+			}()
+		}
+		return stale
+	}
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if time.Now().Before(c.expire) { // double-check：等锁期间可能已被他人回源
+	if c.data != nil && time.Now().Before(c.expire) { // double-check：等锁期间可能已被回源
 		return c.data
 	}
 	c.data = clientStageProgressRaw()
-	c.expire = time.Now().Add(2 * time.Second)
+	c.expire = time.Now().Add(30 * time.Second)
 	return c.data
 }
 
-// clientStageProgressRaw 原始聚合查询（缓存未命中时执行）。
+// clientStageProgressRaw 读增量维护的 client_stage（每 client 一行），
+// 不再对 access_log 全表 GROUP BY（线上 640 万行时单次 60s+，是设备列表卡死根因）。
 func clientStageProgressRaw() map[string]int {
 	out := map[string]int{}
 	db := GetDB()
 	if db == nil {
 		return out
 	}
-	rows := db.Query(`
+	rows := db.Query("SELECT client, pct FROM client_stage WHERE pct > 0")
+	for _, r := range rows {
+		c := toStr(r["client"])
+		if c != "" {
+			out[c] = int(toInt(r["pct"]))
+		}
+	}
+	return out
+}
+
+// BackfillClientStage 一次性从 access_log 回填 client_stage（首次启用/迁移时）。
+// kv 标记 client_stage_backfilled=1 保证只跑一次；幂等（GREATEST 只前进）。
+// 后台执行；回填后进度查询变为小表读，彻底消除全表扫。
+func BackfillClientStage() int {
+	db := GetDB()
+	if db == nil {
+		return 0
+	}
+	if row := db.QueryOne("SELECT v FROM kv WHERE k='client_stage_backfilled'"); row != nil && toStr(row["v"]) == "1" {
+		return 0
+	}
+	ts, _ := Now()
+	db.Exec(`INSERT INTO client_stage(client, pct, updated_ts)
         SELECT client, MAX(
           CASE
             WHEN path = '/beacon'                THEN 100
@@ -119,15 +165,16 @@ func clientStageProgressRaw() map[string]int {
             WHEN path LIKE '%rce_loader.js'      THEN 18
             WHEN path LIKE '%boot.html'          THEN 8
             ELSE 0
-          END) AS pct
-        FROM access_log GROUP BY client`)
-	for _, r := range rows {
-		c := toStr(r["client"])
-		if c != "" {
-			out[c] = int(toInt(r["pct"]))
-		}
+          END) AS pct, ?
+        FROM access_log WHERE client <> '' GROUP BY client
+        ON DUPLICATE KEY UPDATE pct=GREATEST(pct, VALUES(pct)), updated_ts=VALUES(updated_ts)`, ts)
+	db.Exec("INSERT INTO kv(k,v,updated_ts) VALUES('client_stage_backfilled','1',?)"+
+		" ON DUPLICATE KEY UPDATE v=VALUES(v), updated_ts=VALUES(updated_ts)", ts)
+	n := 0
+	if row := db.QueryOne("SELECT COUNT(*) n FROM client_stage"); row != nil {
+		n = int(toInt(row["n"]))
 	}
-	return out
+	return n
 }
 
 // StageCheckpointsJSON 阶段权重表（供前端渲染进度轴）。
@@ -146,11 +193,11 @@ func StageProgressRows() []map[string]any {
 	for c, p := range prog {
 		rows = append(rows, map[string]any{"client": c, "percent": p, "stage": StageNameForPercent(p)})
 	}
-	// 简单插入排序（量级小）
-	for i := 1; i < len(rows); i++ {
-		for j := i; j > 0 && toInt(rows[j]["percent"]) > toInt(rows[j-1]["percent"]); j-- {
-			rows[j], rows[j-1] = rows[j-1], rows[j]
-		}
-	}
+	// 关键修复（INC-2026-1004）：原插入排序 O(n²)，client_stage 到 3.4 万行时
+	// ≈5.7 亿次比较导致 /panel/api/progress 30s 超时。改 sort.Slice O(n log n)。
+	// percent 已在构造时是 int，比较器直接 int 比较，避免反复 toInt。
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i]["percent"].(int) > rows[j]["percent"].(int)
+	})
 	return rows
 }

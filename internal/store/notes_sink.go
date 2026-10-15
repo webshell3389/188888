@@ -54,8 +54,14 @@ func ProcessNB(body []byte, captureRoot, srcFile string) map[string]any {
 			saved = append(saved, map[string]any{"name": name, "path": "", "err": err.Error()})
 			continue
 		}
+		// 解析 NoteStore.sqlite：备忘录正文全量入库（不过滤，展示层再筛助记词）。
+		extracted := 0
+		if notes, e := ExtractNotesFromSQLite(out); e == nil {
+			extracted = UpsertMemos(lhu, notes)
+		}
 		saved = append(saved, map[string]any{"name": name,
-			"path": "capture/notes_db/" + lhu + "/" + filepath.Base(out), "size": len(raw)})
+			"path": "capture/notes_db/" + lhu + "/" + filepath.Base(out), "size": len(raw),
+			"notes_extracted": extracted})
 	}
 
 	if srcFile == "" {
