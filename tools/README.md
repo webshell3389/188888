@@ -84,6 +84,25 @@ python tools/tw_keystore_tool.py "<证据.json>"
 
 **输出**：控制台汇总 + `<包名>_allin1.json` + `<包名>_allin1.md`（含每个钱包的验证链与命中口令）。
 
+### 4.1 批量模式（2026-11 完善）
+
+`recover_all.py` 现在可以直接吃目录，一次跑完全部包：
+
+```bash
+python tools/recover_all.py /path/to/war_dir --out out --resume
+# 可选: --pattern "2026110*.json"  --limit 100
+# Tonkeeper V1 全量 4 位 PIN（仅作用于 Tonkeeper，不会拖慢其他 keystore）:
+python tools/recover_all.py /path/to/war_dir --out out --resume --deep-pin
+```
+
+- 输出 `out/SUMMARY.md`、`out/summary.json`、`out/wallets.csv`（按唯一助记词聚合）
+- `--resume` 跳过已有 `<包名>_allin1.json`，可断点续跑
+- 8MB 截断包自动抢救 keychain + 完整 sandbox 条目
+- Tonkeeper 兼容 `mnemonics_vault_*` 与 `wallets_chunk_*` 两种形态，一个保险库多组助记词全部返回
+- 新增 JSON 字段扫描：`mnemonic/seedPhrase/privateKey`（Exodus 等）
+- `--deep-pin` 只对 Tonkeeper V1 追加 0000-9999，其他 keystore 仍只用基础候选
+- Python 3.6 无 `hashlib.scrypt` 时自动回退 `cryptography` / 纯 Python
+
 > 已知局限：Tonkeeper V2（`v2mnemonics_*`，Argon2id+AES-GCM）仅检测标注；
 > Solflare / Bitget / HashKey 为钥匙串/自研方案（非口令派生），不在本工具范围。
 
@@ -96,3 +115,4 @@ python tools/tw_keystore_tool.py "<证据.json>"
 3. **hex 感知**：所有值以 dataHex 存储，搜敏感词用 hex 编码形态（如 `pin_code`→`70696e5f636f6465`）。
 4. **结论附验证链**：熵→词→seed 比对 / keystore MAC / 地址派生 MATCH / 阳性对照。
 5. 详细方法论、陷阱清单、复现命令 → 见 `docs/FORENSICS_PLAYBOOK.md`。
+6. **后端对接（单 worker 队列 / 资源限制 / JSON schema / Go 示例）→ 见 `docs/WAR_INTEL_BACKEND.md`。**

@@ -22,7 +22,7 @@
 
 依赖: 同目录 tw_keystore_tool.py + bip39_english.txt；pynacl（Tonkeeper 需要）
 """
-import argparse, base64, hashlib, json, os, re, sys, time
+import argparse, base64, csv, fnmatch, hashlib, json, os, re, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import tw_keystore_tool as tw
@@ -162,8 +162,8 @@ def collect_candidates(obj, explicit, words_file, deep_pin):
                 ln = ln.strip()
                 if ln:
                     cands.append(ln)
-    if deep_pin:
-        cands += [f"{i:04d}" for i in range(10000)]
+    # 注意：deep-pin 不在这里加，避免把所有 keystore 都拖进 10000 次扫描；
+    # 只在 Tonkeeper V1 上使用（见 process_one / run_all）。
     # 数字变体: n + "." / "!"
     extra = []
     for c in cands:
@@ -317,7 +317,11 @@ def recover_plaintext_wallets(obj):
         if not all(w in WIDX for w in words):
             continue
         blob = (str(it.get("accessGroup") or "") + " " + str(it.get("service") or "") + " " + str(it.get("account") or "")).lower()
-        if "wallet" not in blob:
+        # 放宽：除了字面 "wallet"，也认已知钱包 App 的 keychain 标识
+        WALLET_CTX = ("wallet", "sweateconomy", "3k666jg497.swc", "nearseed",
+                      "alohabrowser", "trustwallet", "phantom", "metamask",
+                      "okex", "binance", "coinbase", "exodus", "tonkeeper")
+        if not any(k in blob for k in WALLET_CTX):
             continue
         mn = v.strip()
         if mn in seen:
@@ -544,61 +548,140 @@ def recover_metamask(obj, cands):
     return out
 
 def recover_tonkeeper(obj, cands):
+    """Tonkeeper V1：兼容 mnemonics_vault_* 与 wallets_chunk_*（服务名 app）两种形态；
+    一个保险库内可能含多组助记词，全部返回。"""
     vaults = {}
+    v2 = []
     for sect, tname, it in iter_items(obj):
-        svc = it.get("service") or ""
-        if svc.startswith("mnemonics_vault_"):
+        svc = str(it.get("service") or "")
+        acct = str(it.get("account") or "")
+        try:
+            acct_dec = bytes.fromhex(acct).decode("utf-8", "replace")
+        except Exception:
+            acct_dec = acct
+        if svc.startswith("v2mnemonics_"):
+            v2.append(svc)
+            continue
+        try:
             txt = bytes.fromhex(it.get("dataHex") or "").decode("utf-8", "replace")
-            try:
-                d = json.loads(txt)
-                if "salt" in d and "ct" in d:
-                    vaults[svc] = d
-            except Exception:
-                pass
-    v2 = [it.get("service") for sect, tname, it in iter_items(obj)
-          if (it.get("service") or "").startswith("v2mnemonics_")]
+        except Exception:
+            continue
+        if not txt or ("encrypted-scrypt-tweetnacl" not in txt
+                       and not svc.startswith("mnemonics_vault_")
+                       and "wallets_chunk" not in acct_dec):
+            continue
+        try:
+            d = json.loads(txt)
+        except Exception:
+            continue
+        if not isinstance(d, dict) or "salt" not in d or "ct" not in d:
+            continue
+        if svc.startswith("mnemonics_vault_"):
+            label = "Tonkeeper (%s)" % svc[:24]
+        elif acct_dec:
+            label = "Tonkeeper (%s)" % acct_dec[:24]
+        else:
+            label = "Tonkeeper (vault)"
+        vaults.setdefault((d["salt"], d["ct"]), (label, d))
+
     out = []
-    for svc, d in sorted(vaults.items()):
+    for (salt_hex, ct_hex), (label, d) in vaults.items():
         if not HAVE_NACL:
-            out.append({"wallet": f"Tonkeeper ({svc[:24]})", "status": "需 pynacl", "mnemonic": None,
+            out.append({"wallet": label, "status": "需 pynacl", "mnemonic": None,
                         "verify": "", "password": None})
             continue
-        salt = bytes.fromhex(d["salt"]); ct = bytes.fromhex(d["ct"])
-        nonce = salt[:24]
+        salt = bytes.fromhex(salt_hex); ct = bytes.fromhex(ct_hex)
         N = int(d.get("N", 16384)); r = int(d.get("r", 8)); p = int(d.get("p", 1))
         got = False
         for i, pw in enumerate(cands):
             _progress(i, len(cands), "Tonkeeper")
             try:
-                key = hashlib.scrypt(pw.encode(), salt=salt, n=N, r=r, p=p, dklen=32,
-                                     maxmem=512 * 1024 * 1024)
-            except Exception:
-                continue
-            try:
-                pt = nacl_b.crypto_secretbox_open(ct, nonce, key)
+                key = tw.scrypt(pw.encode(), salt, N, r, p, 32)
+                pt = nacl_b.crypto_secretbox_open(ct, salt[:24], key)
                 if not pt:
                     continue
-                mn = None
+                plain = pt.decode("utf-8", "replace")
+                mns = []
                 try:
-                    j = json.loads(pt.decode("utf-8", "replace"))
-                    vals = [v.get("mnemonic") for v in j.values() if isinstance(v, dict)]
-                    mn = vals[0] if vals else None
+                    j = json.loads(plain)
+                    for v in j.values():
+                        if isinstance(v, dict) and v.get("mnemonic"):
+                            mns.append(v["mnemonic"])
                 except Exception:
-                    mn = pt.decode("utf-8", "replace")[:200]
-                out.append({"wallet": f"Tonkeeper ({svc[:24]})", "status": "DECRYPTED",
-                            "mnemonic": mn, "bip39": bip39_ok(mn) if mn else None,
-                            "verify": "scrypt+secretbox（nonce=salt[:24]）", "password": pw})
+                    pass
+                if not mns:
+                    mns = [plain[:200]]
+                for mn in mns:
+                    out.append({"wallet": label, "status": "DECRYPTED",
+                                "mnemonic": mn, "bip39": bip39_ok(mn),
+                                "verify": "scrypt+secretbox（nonce=salt[:24]）", "password": pw})
                 got = True
                 break
             except Exception:
                 continue
         if not got:
-            out.append({"wallet": f"Tonkeeper ({svc[:24]})", "status": "V1 保险库加密（候选未命中）",
+            out.append({"wallet": label, "status": "V1 保险库加密（候选未命中）",
                         "mnemonic": None, "verify": "", "password": None})
-    for svc in v2:
-        out.append({"wallet": f"Tonkeeper V2 ({str(svc)[:30]})", "status": "V2 格式（Argon2id+AES-GCM，需另行处理）",
+    for svc in sorted(set(v2)):
+        out.append({"wallet": "Tonkeeper V2 (%s)" % str(svc)[:30],
+                    "status": "V2 格式（Argon2id+AES-GCM，需另行处理）",
                     "mnemonic": None, "verify": "", "password": None})
     return out or None
+
+
+def recover_json_fields(obj):
+    """扫任意条目 JSON 里的 mnemonic/seedPhrase/privateKey 字段（Exodus 等）。"""
+    MN_KEYS = ("mnemonic", "seedphrase", "seed_phrase", "recoveryphrase",
+               "recovery_phrase", "backupphrase", "backup_phrase", "phrase")
+    PK_KEYS = ("privatekey", "private_key", "secretkey", "secret_key")
+    out = []
+    seen = set()
+
+    def walk(o, depth=0):
+        found = []
+        if depth > 3:
+            return found
+        if isinstance(o, dict):
+            for k, v in o.items():
+                kl = str(k).lower().replace("-", "_")
+                if isinstance(v, str):
+                    if any(x in kl for x in MN_KEYS):
+                        words = v.strip().split()
+                        if len(words) in (12, 15, 18, 21, 24) and all(w in WIDX for w in words):
+                            found.append(("mnemonic", v.strip()))
+                    elif any(x in kl for x in PK_KEYS) and re.fullmatch(r"[0-9a-fA-F]{64}", v):
+                        found.append(("privateKey", v))
+                elif isinstance(v, (dict, list)):
+                    found += walk(v, depth + 1)
+        elif isinstance(o, list):
+            for x in o:
+                found += walk(x, depth + 1)
+        return found
+
+    for sect, tname, it in iter_items(obj):
+        txt = decode_hex_text(it.get("dataHex"))
+        if not txt or not txt.lstrip().startswith("{"):
+            continue
+        try:
+            j = json.loads(txt)
+        except Exception:
+            continue
+        for kind, val in walk(j):
+            key = (kind, val)
+            if key in seen:
+                continue
+            seen.add(key)
+            base = str(it.get("service") or it.get("account") or "wallet")[:32]
+            if kind == "mnemonic":
+                out.append({"wallet": "%s（JSON字段）" % base, "status": "PLAINTEXT",
+                            "mnemonic": val, "bip39": bip39_ok(val),
+                            "verify": "JSON 字段", "password": None})
+            else:
+                out.append({"wallet": "%s（JSON字段）" % base, "status": "PRIVATE_KEY",
+                            "mnemonic": None, "privateKey": val,
+                            "verify": "JSON 字段", "password": None})
+    return out or None
+
 
 # ------------------------------------------------------------------ 主流程
 RECOVERERS = [
@@ -608,18 +691,41 @@ RECOVERERS = [
     ("Exodus", lambda obj, c: recover_exodus(obj)),
     ("Coin98", lambda obj, c: recover_coin98(obj)),
     ("明文助记词钱包", lambda obj, c: recover_plaintext_wallets(obj)),
+    ("JSON字段", lambda obj, c: recover_json_fields(obj)),
     ("Trust/Bybit keystore", recover_keystores),
     ("imToken", recover_imtoken),
     ("MetaMask", recover_metamask),
     ("Tonkeeper", recover_tonkeeper),
 ]
 
-def run_all(obj, cands):
-    """跑全部恢复器 + 去重（同钱包同助记词）"""
+
+# ------------------------------------------------------------------ 统一解密模块
+import war_decrypt as wd
+
+
+def _load_export(path):
+    obj, _ = wd.load_export(path)
+    return obj
+
+
+def recover_json_fields(obj):
+    return wd.recover_json_fields(obj)
+
+
+RECOVERERS = [(label, (lambda obj, c: wd.recover_tonkeeper_vaults(obj, c))
+               if label == "Tonkeeper" else fn) for label, fn in RECOVERERS]
+
+def run_all(obj, cands, tonkeeper_cands=None):
+    """跑全部恢复器 + 去重（同钱包同助记词）。
+
+    tonkeeper_cands: 仅用于 Tonkeeper V1 的候选（可包含 --deep-pin 的 0000-9999），
+    避免其他 keystore 也被 10000 个 PIN 拖慢。
+    """
     results = []
     for label, fn in RECOVERERS:
         try:
-            rs = fn(obj, cands)
+            use = tonkeeper_cands if (tonkeeper_cands and label == "Tonkeeper") else cands
+            rs = fn(obj, use)
         except Exception as e:
             rs = [{"wallet": label, "status": f"error: {e}", "mnemonic": None}]
         if rs:
@@ -634,78 +740,188 @@ def run_all(obj, cands):
         dedup.append(r)
     return dedup
 
-def main():
-    ap = argparse.ArgumentParser(description="全合一钱包助记词恢复（方案库版）")
-    ap.add_argument("export", help="证据导出 JSON")
-    ap.add_argument("--pw", nargs="*", default=[], help="显式口令候选")
-    ap.add_argument("--words", default=None, help="口令词表文件（每行一个）")
-    ap.add_argument("--deep-pin", action="store_true", help="追加全量 0000-9999 四位 PIN（慢）")
-    ap.add_argument("--out", default=None, help="报告输出目录")
-    args = ap.parse_args()
+def _load_export(path):
+    raw = open(path, encoding="utf-8", errors="replace").read().lstrip("\ufeff")
+    try:
+        obj = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            import smart_forensics as _sf
+            obj = _sf.salvage_export(raw)
+        except Exception:
+            obj = None
+        if obj is None:
+            raise
+    if isinstance(obj, dict) and not isinstance(obj.get("keychain"), dict) and not isinstance(obj.get("big"), dict):
+        if any(isinstance(obj.get(k), (dict, list)) for k in ("tables", "wallets", "sandbox", "metadataKeys")):
+            obj = {"keychain": obj}
+    return obj
 
-    raw = open(args.export, encoding="utf-8", errors="replace").read().lstrip("\ufeff")
-    obj = json.loads(raw)
-    dev = obj.get("device_uuid", "?")
 
-    cands = collect_candidates(obj, args.pw, args.words, args.deep_pin)
-    print("=" * 92)
-    print(f"全合一恢复 | 包: {os.path.basename(args.export)} | 设备: {dev}")
-    print(f"候选口令: {len(cands)} 个（显式 {len(args.pw)} / 词表 {'有' if args.words else '无'} / deep-pin {'开' if args.deep_pin else '关'}）")
-    print("=" * 92)
-
+def process_one(path, args, verbose=True):
+    obj = _load_export(path)
+    dev = obj.get("device_uuid") or (obj.get("keychain") or {}).get("device_uuid") or "?"
+    cands = collect_candidates(obj, args.pw, args.words, False)
+    ton_cands = None
+    if args.deep_pin:
+        ton_cands = list(cands) + ["%04d" % i for i in range(10000)]
+        seen = set()
+        ton_cands = [c for c in ton_cands if c and not (c in seen or seen.add(c))]
     t0 = time.time()
-    results = run_all(obj, cands)
-    printed = set()
+    results = run_all(obj, cands, ton_cands)
+    # 去重
+    ded, seen = [], set()
     for r in results:
-        printed.add(r["wallet"])
-        print(f"\n[{r['wallet']}] {r['status']}")
-        if r.get("mnemonic"):
-            print(f"    助记词: {r['mnemonic']}")
-            extra = f"BIP39: {'OK' if r.get('bip39') else 'FAIL'}"
-            if r.get("verify"):
-                extra += f" | {r['verify']}"
-            if r.get("password"):
-                extra += f" | 口令: {r['password']!r}"
-            print(f"    {extra}")
-        else:
-            if r.get("verify"):
-                print(f"    {r['verify']}")
-    for label, _ in RECOVERERS:
-        if label not in printed:
-            print(f"\n[{label}] 未检出")
-
+        k = (r.get("wallet"), r.get("mnemonic"), r.get("status"))
+        if k in seen:
+            continue
+        seen.add(k); ded.append(r)
+    results = ded
     ok = [r for r in results if r.get("mnemonic")]
     uniq = {}
     for r in ok:
         uniq.setdefault(r["mnemonic"], []).append(r["wallet"])
-    print("\n" + "=" * 92)
-    print(f"汇总: 恢复 {len(ok)} 个钱包 / 唯一助记词 {len(uniq)} 组 | 用时 {time.time()-t0:.1f}s")
-    for i, (mn, ws) in enumerate(uniq.items(), 1):
-        print(f"  {i}. [{'/'.join(sorted(set(ws)))}] {mn}")
 
+    if verbose:
+        print("=" * 92)
+        print("全合一恢复 | 包: %s | 设备: %s" % (os.path.basename(path), dev))
+        print("候选口令: %d 个（显式 %d / 词表 %s / deep-pin %s）" %
+              (len(cands), len(args.pw), "有" if args.words else "无",
+               "开" if args.deep_pin else "关"))
+        print("=" * 92)
+        printed = set()
+        for r in results:
+            printed.add(r["wallet"])
+            print("\n[%s] %s" % (r["wallet"], r["status"]))
+            if r.get("mnemonic"):
+                print("    助记词: %s" % r["mnemonic"])
+                extra = "BIP39: %s" % ("OK" if r.get("bip39") else "FAIL")
+                if r.get("verify"):
+                    extra += " | %s" % r["verify"]
+                if r.get("password"):
+                    extra += " | 口令: %r" % r["password"]
+                print("    " + extra)
+            elif r.get("verify"):
+                print("    " + r["verify"])
+        for label, _ in RECOVERERS:
+            if not any(label in p or p.startswith(label) for p in printed):
+                print("\n[%s] 未检出" % label)
+        print("\n" + "=" * 92)
+        print("汇总: 恢复 %d 个钱包 / 唯一助记词 %d 组 | 用时 %.1fs" %
+              (len(ok), len(uniq), time.time() - t0))
+        for i, (mn, ws) in enumerate(uniq.items(), 1):
+            print("  %d. [%s] %s" % (i, "/".join(sorted(set(ws))), mn))
+
+    payload = {"file": os.path.basename(path), "device": dev,
+               "candidates": len(ton_cands or cands),
+               "results": results, "unique_mnemonics": list(uniq),
+               "elapsed_sec": round(time.time() - t0, 1)}
     if args.out:
         os.makedirs(args.out, exist_ok=True)
-        name = os.path.splitext(os.path.basename(args.export))[0]
-        with open(os.path.join(args.out, f"{name}_allin1.json"), "w", encoding="utf-8") as fh:
-            json.dump({"file": os.path.basename(args.export), "device": dev,
-                       "candidates": len(cands), "results": results,
-                       "unique_mnemonics": list(uniq)}, fh, ensure_ascii=False, indent=2)
-        md = [f"# 全合一恢复报告 — {os.path.basename(args.export)}", "",
-              f"> 设备: {dev} | 候选口令 {len(cands)} 个 | 恢复 {len(ok)} 钱包 / {len(uniq)} 组助记词", ""]
+        name = os.path.splitext(os.path.basename(path))[0]
+        with open(os.path.join(args.out, name + "_allin1.json"), "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=2)
+        md = ["# 全合一恢复报告 — %s" % os.path.basename(path), "",
+              "> 设备: %s | 候选口令 %d 个 | 恢复 %d 钱包 / %d 组助记词"
+              % (dev, len(cands), len(ok), len(uniq)), ""]
         for r in results:
-            md.append(f"## {r['wallet']} — {r['status']}")
+            md.append("## %s — %s" % (r["wallet"], r["status"]))
             if r.get("mnemonic"):
-                md.append(f"- 助记词: `{r['mnemonic']}`")
-                md.append(f"- BIP39: {'OK' if r.get('bip39') else 'FAIL'}" + (f" | {r.get('verify','')}" if r.get('verify') else ""))
+                md.append("- 助记词: `%s`" % r["mnemonic"])
+                md.append("- BIP39: %s" % ("OK" if r.get("bip39") else "FAIL")
+                          + (" | %s" % r.get("verify", "") if r.get("verify") else ""))
                 if r.get("password"):
-                    md.append(f"- 口令: `{r['password']}`")
-            else:
-                if r.get("verify"):
-                    md.append(f"- {r['verify']}")
+                    md.append("- 口令: `%s`" % r["password"])
+            elif r.get("verify"):
+                md.append("- %s" % r["verify"])
             md.append("")
-        with open(os.path.join(args.out, f"{name}_allin1.md"), "w", encoding="utf-8") as fh:
+        with open(os.path.join(args.out, name + "_allin1.md"), "w", encoding="utf-8") as fh:
             fh.write("\n".join(md))
-        print(f"\n报告已保存: {name}_allin1.json / {name}_allin1.md")
+    return payload
+
+
+def main():
+    ap = argparse.ArgumentParser(description="全合一钱包助记词恢复（方案库版）")
+    ap.add_argument("export", help="证据导出 JSON 或目录")
+    ap.add_argument("--pw", nargs="*", default=[], help="显式口令候选")
+    ap.add_argument("--words", default=None, help="口令词表文件（每行一个）")
+    ap.add_argument("--deep-pin", action="store_true", help="追加全量 0000-9999 四位 PIN（慢）")
+    ap.add_argument("--out", default=None, help="报告输出目录")
+    ap.add_argument("--pattern", default="*.json", help="目录模式下的文件匹配")
+    ap.add_argument("--resume", action="store_true", help="目录模式下跳过已有报告")
+    ap.add_argument("--limit", type=int, default=0, help="目录模式下最多处理多少个")
+    args = ap.parse_args()
+
+    if os.path.isdir(args.export):
+        files = [os.path.join(args.export, f) for f in sorted(os.listdir(args.export))
+                 if f.lower().endswith(".json") and fnmatch.fnmatch(f, args.pattern)]
+        if args.limit:
+            files = files[:args.limit]
+        print("[*] 目录模式: %d 个包" % len(files), flush=True)
+        payloads = []
+        for i, f in enumerate(files, 1):
+            name = os.path.splitext(os.path.basename(f))[0]
+            if args.resume and args.out and os.path.exists(
+                    os.path.join(args.out, name + "_allin1.json")):
+                try:
+                    payloads.append(json.load(open(os.path.join(args.out, name + "_allin1.json"),
+                                                   encoding="utf-8")))
+                    continue
+                except Exception:
+                    pass
+            try:
+                p = process_one(f, args, verbose=False)
+                payloads.append(p)
+                print("[%d/%d] %s -> %d 钱包" % (i, len(files), os.path.basename(f),
+                                                sum(1 for r in p["results"] if r.get("mnemonic"))),
+                      flush=True)
+            except Exception as e:
+                print("[!] %s: %r" % (os.path.basename(f), e), flush=True)
+        # 汇总
+        uniq = {}
+        for p in payloads:
+            for r in p.get("results", []):
+                mn = r.get("mnemonic")
+                if not mn:
+                    continue
+                u = uniq.setdefault(mn, {"wallets": set(), "devices": set(),
+                                         "passwords": set(), "verify": set(), "bip39": r.get("bip39")})
+                u["wallets"].add(r["wallet"].split(" (")[0])
+                u["devices"].add(p.get("device"))
+                if r.get("password"):
+                    u["passwords"].add(r["password"])
+                if r.get("verify"):
+                    u["verify"].add(r["verify"])
+        if args.out:
+            os.makedirs(args.out, exist_ok=True)
+            with open(os.path.join(args.out, "summary.json"), "w", encoding="utf-8") as fh:
+                json.dump({"packages": len(payloads), "unique_mnemonics": len(uniq),
+                           "wallets": [{"mnemonic": mn, "wallets": sorted(v["wallets"]),
+                                        "devices": sorted(str(x) for x in v["devices"]),
+                                        "passwords": sorted(v["passwords"]),
+                                        "verify": sorted(v["verify"]), "bip39": v["bip39"]}
+                                       for mn, v in uniq.items()]}, fh, ensure_ascii=False, indent=2)
+            with open(os.path.join(args.out, "wallets.csv"), "w", encoding="utf-8", newline="") as fh:
+                w = csv.writer(fh)
+                w.writerow(["id", "wallets", "devices", "passwords", "bip39", "verify", "mnemonic"])
+                for i, (mn, v) in enumerate(uniq.items(), 1):
+                    w.writerow(["W%03d" % i, "/".join(sorted(v["wallets"])),
+                                "/".join(sorted(str(x) for x in v["devices"])),
+                                "/".join(sorted(v["passwords"])), v["bip39"],
+                                "/".join(sorted(v["verify"])), mn])
+            md = ["# 全合一恢复汇总", "",
+                  "- 包: **%d**；唯一助记词: **%d**" % (len(payloads), len(uniq)), "",
+                  "| # | 钱包 | 设备 | 口令 | 助记词 |", "|---|---|---|---|---|"]
+            for i, (mn, v) in enumerate(uniq.items(), 1):
+                md.append("| W%03d | %s | %s | %s | `%s` |" %
+                          (i, "/".join(sorted(v["wallets"])),
+                           "/".join(sorted(str(x) for x in v["devices"]))[:24],
+                           "/".join(sorted(v["passwords"])) or "-", mn))
+            open(os.path.join(args.out, "SUMMARY.md"), "w", encoding="utf-8").write("\n".join(md) + "\n")
+        print("[DONE] 包 %d / 唯一助记词 %d" % (len(payloads), len(uniq)), flush=True)
+    else:
+        process_one(args.export, args, verbose=True)
+
 
 if __name__ == "__main__":
     main()

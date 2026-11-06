@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import struct
 import sys
 import unicodedata
 
@@ -156,8 +157,99 @@ def aes_ctr(key, iv, data):
     return bytes(out)
 
 
+# ------------------------------------------------------------------ scrypt 兼容层
+# Python 3.6 / 某些精简 OpenSSL 构建没有 hashlib.scrypt。
+# 依次尝试：hashlib.scrypt -> cryptography.Scrypt -> 纯 Python 实现（慢但可用）。
+_M32 = 0xFFFFFFFF
+
+
+def _rotl32(x, n):
+    return ((x << n) | (x >> (32 - n))) & _M32
+
+
+def _salsa20_8(x):
+    z = list(x)
+    for _ in range(4):
+        z[4] ^= _rotl32((z[0] + z[12]) & _M32, 7)
+        z[8] ^= _rotl32((z[4] + z[0]) & _M32, 9)
+        z[12] ^= _rotl32((z[8] + z[4]) & _M32, 13)
+        z[0] ^= _rotl32((z[12] + z[8]) & _M32, 18)
+        z[9] ^= _rotl32((z[5] + z[1]) & _M32, 7)
+        z[13] ^= _rotl32((z[9] + z[5]) & _M32, 9)
+        z[1] ^= _rotl32((z[13] + z[9]) & _M32, 13)
+        z[5] ^= _rotl32((z[1] + z[13]) & _M32, 18)
+        z[14] ^= _rotl32((z[10] + z[6]) & _M32, 7)
+        z[2] ^= _rotl32((z[14] + z[10]) & _M32, 9)
+        z[6] ^= _rotl32((z[2] + z[14]) & _M32, 13)
+        z[10] ^= _rotl32((z[6] + z[2]) & _M32, 18)
+        z[3] ^= _rotl32((z[15] + z[11]) & _M32, 7)
+        z[7] ^= _rotl32((z[3] + z[15]) & _M32, 9)
+        z[11] ^= _rotl32((z[7] + z[3]) & _M32, 13)
+        z[15] ^= _rotl32((z[11] + z[7]) & _M32, 18)
+        z[1] ^= _rotl32((z[0] + z[3]) & _M32, 7)
+        z[2] ^= _rotl32((z[1] + z[0]) & _M32, 9)
+        z[3] ^= _rotl32((z[2] + z[1]) & _M32, 13)
+        z[0] ^= _rotl32((z[3] + z[2]) & _M32, 18)
+        z[6] ^= _rotl32((z[5] + z[4]) & _M32, 7)
+        z[7] ^= _rotl32((z[6] + z[5]) & _M32, 9)
+        z[4] ^= _rotl32((z[7] + z[6]) & _M32, 13)
+        z[5] ^= _rotl32((z[4] + z[7]) & _M32, 18)
+        z[11] ^= _rotl32((z[10] + z[9]) & _M32, 7)
+        z[8] ^= _rotl32((z[11] + z[10]) & _M32, 9)
+        z[9] ^= _rotl32((z[8] + z[11]) & _M32, 13)
+        z[10] ^= _rotl32((z[9] + z[8]) & _M32, 18)
+        z[12] ^= _rotl32((z[15] + z[14]) & _M32, 7)
+        z[13] ^= _rotl32((z[12] + z[15]) & _M32, 9)
+        z[14] ^= _rotl32((z[13] + z[12]) & _M32, 13)
+        z[15] ^= _rotl32((z[14] + z[13]) & _M32, 18)
+    return [(z[i] + x[i]) & _M32 for i in range(16)]
+
+
+def _blockmix(b, r):
+    x = list(struct.unpack("<16I", b[(2 * r - 1) * 64:2 * r * 64]))
+    y = []
+    for i in range(2 * r):
+        blk = struct.unpack("<16I", b[i * 64:(i + 1) * 64])
+        x = _salsa20_8([a ^ c for a, c in zip(x, blk)])
+        y.append(x)
+    out = b"".join(struct.pack("<16I", *y[i]) for i in range(0, 2 * r, 2))
+    out += b"".join(struct.pack("<16I", *y[i]) for i in range(1, 2 * r, 2))
+    return out
+
+
+def _romix(b, n, r):
+    x = b
+    v = []
+    for _ in range(n):
+        v.append(x)
+        x = _blockmix(x, r)
+    for _ in range(n):
+        j = struct.unpack("<I", x[(2 * r - 1) * 64:(2 * r - 1) * 64 + 4])[0] & (n - 1)
+        x = _blockmix(bytes(a ^ c for a, c in zip(x, v[j])), r)
+    return x
+
+
+def _scrypt_py(pw, salt, n, r, p, dklen):
+    if n < 2 or (n & (n - 1)):
+        raise ValueError("scrypt N must be a power of 2")
+    b = hashlib.pbkdf2_hmac("sha256", pw, salt, 1, p * 128 * r)
+    out = b"".join(_romix(b[i * 128 * r:(i + 1) * 128 * r], n, r) for i in range(p))
+    return hashlib.pbkdf2_hmac("sha256", pw, out, 1, dklen)
+
+
 def scrypt(pw, salt, n, r, p, dklen):
-    return hashlib.scrypt(pw, salt=salt, n=n, r=r, p=p, dklen=dklen, maxmem=512 * 1024 * 1024)
+    n, r, p, dklen = int(n), int(r), int(p), int(dklen)
+    if hasattr(hashlib, "scrypt"):
+        try:
+            return hashlib.scrypt(pw, salt=salt, n=n, r=r, p=p, dklen=dklen,
+                                  maxmem=512 * 1024 * 1024)
+        except (AttributeError, ValueError):
+            pass
+    try:
+        from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
+        return Scrypt(salt=salt, length=dklen, n=n, r=r, p=p).derive(pw)
+    except Exception:
+        return _scrypt_py(pw, salt, n, r, p, dklen)
 
 
 _P = 2 ** 256 - 2 ** 32 - 977
@@ -409,17 +501,31 @@ def p2wpkh(priv, hrp):
 REPAIR_PREFIX = '{"big": {"keychain": {"genp": {"count": 0, "items": [{"'
 
 
+def _unwrap(obj):
+    """pe_worker_v4 的 dump 是扁平结构（tables/wallets 在顶层）；
+    早期导出是 {"keychain": {...}} 包裹。统一包成 keychain 形态，下游逻辑通吃。"""
+    if not isinstance(obj, dict):
+        return obj
+    if isinstance(obj.get("keychain"), dict) or isinstance(obj.get("big"), dict):
+        return obj
+    if any(isinstance(obj.get(k), (dict, list)) for k in ("tables", "wallets", "sandbox", "metadataKeys")):
+        return {"keychain": obj}
+    return obj
+
+
 def load_export(path):
     raw = open(path, encoding="utf-8").read()
     try:
-        return json.loads(raw)
+        return _unwrap(json.loads(raw))
     except json.JSONDecodeError:
-        return json.loads(REPAIR_PREFIX + raw)
+        return _unwrap(json.loads(REPAIR_PREFIX + raw))
 
 
 def find_keystore_files(obj):
     out = {}
-    for k, v in (obj.get("sandbox") or {}).items():
+    sandboxes = [obj.get("sandbox"), (obj.get("keychain") or {}).get("sandbox")]
+    for sb in sandboxes:
+      for k, v in (sb or {}).items():
         if not isinstance(v, dict):
             continue
         for fpath, val in v.items():
